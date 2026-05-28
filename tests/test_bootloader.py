@@ -97,6 +97,16 @@ class TestParseResponse:
         parsed = _parse_hex_memory_response(raw, 8, base_address=FLASH_MEMORY_BASE)
         assert parsed == bytes.fromhex("DEADBEEF01020304")
 
+    def test_parse_bootloader_relative_memory_dump(self) -> None:
+        raw = (
+            b">rmem 800800\r\n"
+            b"Memory at 00800800:\r\n\r\n"
+            b"00000000: F12EED3A 14BD4473 0268CFC3 C9BB5195\r\n"
+            b">"
+        )
+        parsed = _parse_hex_memory_response(raw, 16, base_address=0x00800800)
+        assert parsed == bytes.fromhex("F12EED3A14BD44730268CFC3C9BB5195")
+
 
 # ── FirmwareSpec tests ───────────────────────────────────────────────────
 
@@ -266,7 +276,7 @@ class TestBootloaderProtocol:
         resp = bp.read_flash(0x000000, 4)
 
         cmd = mock_serial.write.call_args_list[0][0][0]
-        assert cmd == b"rmem 00400000 1\r\n"
+        assert cmd == b"rmem 400000\r\n"
         assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
 
     def test_get_modem_info(self, mock_serial: MagicMock) -> None:

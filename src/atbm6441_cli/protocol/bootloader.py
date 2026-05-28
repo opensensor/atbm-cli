@@ -52,6 +52,7 @@ CODE2_ADDR = 0x040000
 
 BOOTLOADER_MAX_SIZE = 48 * 1024  # 48 KB
 FLASH_MEMORY_BASE = 0x00400000  # SDK flash.h: FLASH_BASE for ATBM6441/Hera
+BOOTLOADER_RMEM_PAGE_SIZE = 256
 
 # ── AT command constants ─────────────────────────────────────────────────
 
@@ -148,14 +149,30 @@ def _parse_hex_memory_response(
     Returns:
         Parsed bytes.
     """
+    parsed, parsed_count = _parse_hex_memory_response_with_count(
+        raw,
+        expected_length,
+        base_address=base_address,
+    )
+    if parsed_count == 0 and expected_length:
+        raise ValueError("No hex memory data found in response")
+
+    return parsed
+
+
+def _parse_hex_memory_response_with_count(
+    raw: bytes,
+    expected_length: int,
+    base_address: int | None = None,
+) -> tuple[bytes, int]:
+    """Parse a memory dump and return parsed bytes plus unique byte count."""
     import re
     text = raw.decode("utf-8", errors="replace")
 
     result = bytearray(expected_length)
-    parsed_any = False
+    parsed_positions: set[int] = set()
 
     def write_word(addr: int, word: str) -> None:
-        nonlocal parsed_any
         if base_address is not None and addr >= base_address:
             addr -= base_address
         for byte_idx in range(4):
@@ -163,7 +180,7 @@ def _parse_hex_memory_response(
             if 0 <= pos < expected_length:
                 hex_pos = byte_idx * 2
                 result[pos] = int(word[hex_pos:hex_pos + 2], 16)
-                parsed_any = True
+                parsed_positions.add(pos)
 
     # ETF dump format: {00000000: fa37001e} 45290089 ...
     block_pattern = re.compile(r"\{([0-9a-fA-F]{1,8}):\s*([0-9a-fA-F]{8})\}")
@@ -187,10 +204,7 @@ def _parse_hex_memory_response(
         for word_idx, word in enumerate(words):
             write_word(addr + word_idx * 4, word)
 
-    if not parsed_any and expected_length:
-        raise ValueError("No hex memory data found in response")
-
-    return bytes(result)
+    return bytes(result), len(parsed_positions)
 
 
 @dataclass
@@ -247,6 +261,7 @@ class BootloaderProtocol:
         send_timeout: float = 30.0,
         boot_timeout: float = 5.0,
         serial_monitor: bool = False,
+        flash_base: int = FLASH_MEMORY_BASE,
     ) -> None:
         """Initialize the bootloader protocol.
 
@@ -256,18 +271,27 @@ class BootloaderProtocol:
             send_timeout: Timeout for firmware send operation (seconds).
             boot_timeout: Timeout for bootloader mode entry (seconds).
             serial_monitor: Mirror bootloader TX/RX chunks to stderr.
+            flash_base: Memory-mapped flash base address for bootloader rmem.
         """
         self._serial = serial
         self._chunk_size = chunk_size
         self._send_timeout = send_timeout
         self._boot_timeout = boot_timeout
         self._serial_monitor = serial_monitor
+        self._flash_base = flash_base
         self._progress_callback: Optional[Callable[[int, int], None]] = None
 
     def _monitor_serial(self, direction: str, data: bytes) -> None:
         message = f"{direction} {_format_serial_bytes(data)}"
         if self._serial_monitor:
-            print(message, file=sys.stderr, flush=True)
+            arrow = ">>" if direction == "TX" else "<<"
+            text = data.decode("utf-8", errors="replace")
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            lines = text.split("\n")
+            if lines and lines[-1] == "":
+                lines = lines[:-1]
+            for line in lines or [""]:
+                print(f"[{direction}] {arrow} {line}", file=sys.stderr, flush=True)
         else:
             logger.debug(message)
 
@@ -656,19 +680,68 @@ class BootloaderProtocol:
         if callable(reset):
             reset()
 
-    def read_flash(self, offset: int, length: int = 4) -> BootloaderResponse:
-        """Read bytes from SPI flash through bootloader memory mapping.
+    def _read_bootloader_rmem_page(self, address: int, length: int) -> bytes:
+        """Read one fixed bootloader rmem page using ``rmem <addr>``."""
+        cmd = f"rmem {address:x}\r\n".encode()
+        logger.info("Reading bootloader rmem page at 0x%08X via %r", address, cmd.strip())
+        self._reset_input_buffer()
+        self._monitor_serial("TX", cmd)
+        self._serial.write(cmd)
 
-        The SDK maps flash offset 0 to memory address 0x00400000 in bootloader
-        context. This keeps the public API in flash offsets while avoiding RAM
-        address 0 reads.
-        """
-        if offset < 0:
-            raise ValueError("Flash offset must be non-negative")
-        if length <= 0:
-            return BootloaderResponse(raw=b"", is_ok=True, text="")
+        start_time = time.time()
+        last_idle_report = start_time
+        parsed: bytes | None = None
+        parsed_at = 0.0
+        result = bytearray()
+        expected_text_length = max(length * 16 + 2048, 4096)
+        terminal_markers = (b"\r\n>", b"\n>", b"\r>", b"+OK", b"\nOK")
+        error_markers = (b"+ERR", b"ERROR", b"Unknown command")
 
-        address = FLASH_MEMORY_BASE + offset
+        while True:
+            now = time.time()
+            if now - start_time > 10.0:
+                if parsed is not None:
+                    return parsed
+                raise TimeoutError(f"Timeout waiting for rmem page at 0x{address:08X}")
+            if len(result) > expected_text_length:
+                raise TimeoutError(
+                    f"Read more than {expected_text_length} bytes without completing rmem page"
+                )
+
+            chunk = self._serial.read(length=256, timeout=0.1)
+            if not chunk:
+                now = time.time()
+                if parsed is not None and now - parsed_at >= 0.25:
+                    return parsed
+                if now - last_idle_report >= 5.0:
+                    self._monitor_idle(now - start_time, terminal_markers, len(result))
+                    last_idle_report = now
+                time.sleep(0.01)
+                continue
+
+            self._monitor_serial("RX", chunk)
+            result.extend(chunk)
+            raw = bytes(result)
+
+            if any(marker in raw for marker in error_markers):
+                resp = _parse_response(raw)
+                raise RuntimeError(f"Bootloader rmem rejected command: {resp.text}")
+
+            candidate, parsed_count = _parse_hex_memory_response_with_count(
+                raw,
+                length,
+                base_address=address,
+            )
+            if parsed_count >= length:
+                parsed = candidate
+                parsed_at = time.time()
+
+            if parsed is not None and any(marker in raw for marker in terminal_markers):
+                return parsed
+
+    def _read_flash_legacy(self, offset: int, length: int) -> BootloaderResponse:
+        """Fallback flash reads for app/AT command modes."""
+        address = self._flash_base + offset
         dword_count = (length + 3) // 4
         commands = (
             f"rmem {address:08x} {dword_count}\r\n".encode(),
@@ -683,7 +756,7 @@ class BootloaderProtocol:
             self._monitor_serial("TX", cmd)
             self._serial.write(cmd)
             raw = self._read_until_any(
-                markers=(MARKER_BOOT_PROMPT, b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),
+                markers=(b"\r\n>", b"\n>", b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),
                 timeout=60.0,
                 expected_length=max(length * 8 + 4096, 8192),
             )
@@ -704,6 +777,35 @@ class BootloaderProtocol:
 
         resp = _parse_response(last_raw)
         raise RuntimeError(f"Flash read command rejected by device: {resp.text}")
+
+    def read_flash(self, offset: int, length: int = 4) -> BootloaderResponse:
+        """Read bytes from SPI flash through bootloader memory mapping.
+
+        The bootloader prompt command observed on hardware is ``rmem <addr>``
+        and returns a fixed memory dump page. This keeps the public API in
+        flash offsets while reading enough pages to satisfy the requested byte
+        length.
+        """
+        if offset < 0:
+            raise ValueError("Flash offset must be non-negative")
+        if length <= 0:
+            return BootloaderResponse(raw=b"", is_ok=True, text="")
+
+        result = bytearray()
+        while len(result) < length:
+            page_offset = offset + len(result)
+            page_length = min(BOOTLOADER_RMEM_PAGE_SIZE, length - len(result))
+            address = self._flash_base + page_offset
+            try:
+                page = self._read_bootloader_rmem_page(address, page_length)
+            except (RuntimeError, TimeoutError, ValueError) as e:
+                if result:
+                    raise
+                logger.debug("Bootloader rmem page read failed, trying legacy commands: %s", e)
+                return self._read_flash_legacy(offset, length)
+            result.extend(page[:page_length])
+
+        return BootloaderResponse(raw=bytes(result), is_ok=True, text="")
 
     def get_modem_info(self) -> BootloaderResponse:
         """Get modem info via AT+GMR.

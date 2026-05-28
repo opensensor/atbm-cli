@@ -22,6 +22,7 @@ def read_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--output", "-o", required=True, type=str, help="Output file path")
     p.add_argument("--device", choices=["6441", "6446", "6447"], help="Chip model (skip JEDEC for 6446/6447)")
     p.add_argument("--flash-size", type=str, help="Override flash size (hex, e.g. 0x400000 for 4MB)")
+    p.add_argument("--flash-base", type=str, help="Memory-mapped flash base for bootloader rmem (hex)")
     p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     p.add_argument("--serial-monitor", action="store_true", help="Mirror bootloader TX/RX bytes to stderr")
     p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
@@ -61,10 +62,17 @@ def read_handler(args: argparse.Namespace) -> int:
         serial.open()
 
         # Enter bootloader mode and create protocol instance
+        flash_base = int(args.flash_base, 16) if args.flash_base else None
+        bootloader_kwargs = {
+            "boot_timeout": args.boot_timeout,
+            "serial_monitor": args.serial_monitor,
+        }
+        if flash_base is not None:
+            bootloader_kwargs["flash_base"] = flash_base
+
         bootloader = BootloaderProtocol(
             serial,
-            boot_timeout=args.boot_timeout,
-            serial_monitor=args.serial_monitor,
+            **bootloader_kwargs,
         )
         if args.manual_mode:
             print(
@@ -94,7 +102,12 @@ def read_handler(args: argparse.Namespace) -> int:
                     flash_size = 0x400000  # Default 4MB
                     print(f"Warning: JEDEC ID failed ({e}), using default 4MB", file=sys.stderr)
 
-        reader = FlashReader(serial, flash_size=flash_size, bootloader=bootloader)
+        reader = FlashReader(
+            serial,
+            flash_size=flash_size,
+            chunk_size=256,
+            bootloader=bootloader,
+        )
 
         def progress_callback(bytes_read: int, total: int) -> None:
             pct = (bytes_read / total * 100) if total else 0
