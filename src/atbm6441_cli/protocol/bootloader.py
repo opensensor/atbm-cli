@@ -10,6 +10,10 @@ Protocol discovered from Altobem WIFI IOT GUI V1.0.52:
 6. Wait for ``<<<   download SUCCESS   >>>`` or ``download fail``
 7. Send ``AT+REBOOT\r\n`` → chip reboots with new firmware
 
+When the chip is already at the raw bootloader ``>`` prompt, the prompt does
+not accept AT commands. In that mode firmware is sent with ``fwupdata`` and
+binary ``download_s`` packets.
+
 Firmware image layout:
     - Bootloader:    0x000000 (max 48 KB)
     - KEY data:      0x008000 (key1), 0x101000 (key2)
@@ -67,6 +71,29 @@ AT_PRINT_OFF = b"AT+PRINT 0\r\n"
 AT_WIFI_GET_FWINFO = b"AT+WIFI_GET_FWINFO\r\n"
 AT_WIFI_STATUS = b"AT+WIFI_STATUS\r\n"
 
+BOOT_FWUPDATA = b"fwupdata"
+BOOT_BOOT = b"boot\r\n"
+
+FWUPDATA_CHUNK_SIZE = 4096
+FWUPDATA_PACKET_SIZE = 4108
+FWUPDATA_HEADER_SIZE = 12
+FWUPDATA_DEFAULT_MSG_ID = 0
+FWUPDATA_CODE1_TYPE = 1
+FWUPDATA_CODE2_TYPE = 2
+FWUPDATA_FLAGS_DATA = 0
+FWUPDATA_FLAGS_LAST = 1
+FWUPDATA_CHECKSUM_MODES = ("sum-bytes", "sum-words", "firmware-bytes")
+FWUPDATA_RESULT_NAMES = {
+    0: "DOWNLOAD_SUCCESS",
+    1: "DOWNLOAD_ERR_BAD_WR",
+    2: "DOWNLOAD_ERR_BAD_TYPE",
+    3: "DOWNLOAD_ERR_BAD_OFFSET",
+    4: "DOWNLOAD_ERR_BAD_OP",
+    5: "DOWNLOAD_ERR_FILE_SIZE",
+    6: "DOWNLOAD_ERR_CHECKSUM",
+    7: "DOWNLOAD_ERR_DECODE",
+}
+
 # ── Response markers ─────────────────────────────────────────────────────
 
 MARKER_BOOTLOADER_MODE = b"[ bootloader mode ]"
@@ -74,6 +101,7 @@ MARKER_ROM_CODE_MODE = b"[ rom code mode ]"
 MARKER_BOOT_PROMPT = b">"
 MARKER_DOWNLOAD_SUCCESS = b"download SUCCESS"
 MARKER_DOWNLOAD_FAIL = b"download fail"
+MARKER_FWUPDATA_MODE_V2 = b"change Msg mode v2"
 MARKER_OK = b"OK"
 MARKER_ERROR = b"ERROR"
 
@@ -90,6 +118,30 @@ class BootloaderResponse:
     is_download_success: bool = False
     is_download_fail: bool = False
     text: str = ""
+
+
+@dataclass
+class FwupdataOptions:
+    """Raw bootloader fwupdata protocol options."""
+
+    msg_id: int = FWUPDATA_DEFAULT_MSG_ID
+    code1_type: int = FWUPDATA_CODE1_TYPE
+    code2_type: int = FWUPDATA_CODE2_TYPE
+    normal_flags: int = FWUPDATA_FLAGS_DATA
+    last_flags: int = FWUPDATA_FLAGS_LAST
+    checksum: str = "sum-bytes"
+
+
+@dataclass
+class FwupdataAck:
+    """Binary ``boot_ind_s`` acknowledgement from fwupdata mode."""
+
+    msg_len: int
+    msg_id: int
+    offset: int
+    state: int
+    result: int
+    raw: bytes = field(repr=False)
 
 
 def _parse_response(raw: bytes) -> BootloaderResponse:
@@ -125,6 +177,97 @@ def _format_serial_bytes(data: bytes, limit: int = 256) -> str:
     hex_text = shown.hex(" ")
     suffix = " ..." if len(data) > limit else ""
     return f"{len(data)} bytes ascii={text!r}{suffix} hex={hex_text}{suffix}"
+
+
+def _sum16_words(data: bytes) -> int:
+    """Return a 16-bit little-endian word sum, padding odd inputs with zero."""
+    if len(data) % 2:
+        data += b"\x00"
+    total = 0
+    for i in range(0, len(data), 2):
+        total += data[i] | (data[i + 1] << 8)
+    return total & 0xFFFF
+
+
+def _fwupdata_checksum(packet: bytearray, chunk_length: int, mode: str) -> int:
+    """Compute the fwupdata ``download_s.checksum`` field."""
+    if mode not in FWUPDATA_CHECKSUM_MODES:
+        raise ValueError(f"Unsupported fwupdata checksum mode: {mode}")
+
+    if mode == "firmware-bytes":
+        return sum(packet[FWUPDATA_HEADER_SIZE : FWUPDATA_HEADER_SIZE + chunk_length]) & 0xFFFF
+
+    data = bytes(packet[:10]) + bytes(packet[FWUPDATA_HEADER_SIZE:])
+    if mode == "sum-words":
+        return _sum16_words(data)
+    return sum(data) & 0xFFFF
+
+
+def _build_fwupdata_packet(
+    chunk: bytes,
+    *,
+    offset: int,
+    fw_type: int,
+    flags: int,
+    msg_id: int = FWUPDATA_DEFAULT_MSG_ID,
+    checksum: str = "sum-bytes",
+) -> bytes:
+    """Build a raw bootloader ``download_s`` packet.
+
+    SDK PDB symbols define the packet as:
+
+        uint16_t MsgLen;
+        uint16_t MsgId;
+        uint32_t Offset;
+        uint8_t Flags;
+        uint8_t FwType;
+        uint16_t checksum;
+        uint8_t Firmware[4096];
+
+    ``MsgLen`` is the number of valid firmware bytes in this packet.
+    """
+    if len(chunk) > FWUPDATA_CHUNK_SIZE:
+        raise ValueError(
+            f"fwupdata chunk too large: {len(chunk)} > {FWUPDATA_CHUNK_SIZE}"
+        )
+    if not (0 <= offset <= 0xFFFFFFFF):
+        raise ValueError(f"fwupdata offset out of range: 0x{offset:X}")
+    if not (0 <= msg_id <= 0xFFFF):
+        raise ValueError(f"fwupdata MsgId out of range: 0x{msg_id:X}")
+    if not (0 <= flags <= 0xFF):
+        raise ValueError(f"fwupdata Flags out of range: 0x{flags:X}")
+    if not (0 <= fw_type <= 0xFF):
+        raise ValueError(f"fwupdata FwType out of range: 0x{fw_type:X}")
+
+    packet = bytearray(FWUPDATA_PACKET_SIZE)
+    struct.pack_into(
+        "<HHIBB",
+        packet,
+        0,
+        len(chunk),
+        msg_id,
+        offset,
+        flags,
+        fw_type,
+    )
+    packet[FWUPDATA_HEADER_SIZE : FWUPDATA_HEADER_SIZE + len(chunk)] = chunk
+    struct.pack_into("<H", packet, 10, _fwupdata_checksum(packet, len(chunk), checksum))
+    return bytes(packet)
+
+
+def _parse_fwupdata_ack(raw: bytes) -> FwupdataAck:
+    """Parse a raw ``boot_ind_s`` acknowledgement."""
+    if len(raw) < 16:
+        raise ValueError(f"fwupdata ack too short: {len(raw)} bytes")
+    msg_len, msg_id, offset, state, result = struct.unpack("<HHIII", raw[:16])
+    return FwupdataAck(
+        msg_len=msg_len,
+        msg_id=msg_id,
+        offset=offset,
+        state=state,
+        result=result,
+        raw=raw[:16],
+    )
 
 
 def _parse_hex_memory_response(
@@ -292,6 +435,14 @@ class BootloaderProtocol:
                 lines = lines[:-1]
             for line in lines or [""]:
                 print(f"[{direction}] {arrow} {line}", file=sys.stderr, flush=True)
+        else:
+            logger.debug(message)
+
+    def _monitor_binary(self, direction: str, data: bytes, label: str) -> None:
+        message = f"{direction} {label}: {_format_serial_bytes(data, limit=48)}"
+        if self._serial_monitor:
+            arrow = ">>" if direction == "TX" else "<<"
+            print(f"[{direction}] {arrow} {label}: {_format_serial_bytes(data, limit=48)}", file=sys.stderr, flush=True)
         else:
             logger.debug(message)
 
@@ -500,6 +651,155 @@ class BootloaderProtocol:
             if any(marker in result for marker in terminal_markers):
                 return bytes(result)
 
+    def _read_exact(self, length: int, timeout: float, label: str) -> bytes:
+        """Read an exact number of bytes from the serial stream."""
+        start_time = time.time()
+        last_idle_report = start_time
+        result = bytearray()
+
+        while len(result) < length:
+            now = time.time()
+            if now - start_time > timeout:
+                raise TimeoutError(
+                    f"Timeout waiting for {label}: got {len(result)}/{length} bytes"
+                )
+
+            remaining = length - len(result)
+            chunk = self._serial.read(length=remaining, timeout=min(0.1, timeout))
+            if not chunk:
+                now = time.time()
+                if now - last_idle_report >= 5.0:
+                    self._monitor_idle(now - start_time, (label.encode(),), len(result))
+                    last_idle_report = now
+                time.sleep(0.01)
+                continue
+
+            result.extend(chunk)
+
+        return bytes(result[:length])
+
+    def send_fwupdata_file(
+        self,
+        data: bytes,
+        *,
+        fw_type: int,
+        label: str,
+        options: FwupdataOptions | None = None,
+    ) -> BootloaderResponse:
+        """Send one firmware image through the raw bootloader ``fwupdata`` mode.
+
+        This is the mode reached from the interactive ``>`` prompt. The prompt
+        prints ``change Msg mode v2`` and then consumes binary ``download_s``
+        packets rather than AT commands.
+        """
+        if options is None:
+            options = FwupdataOptions()
+        if options.checksum not in FWUPDATA_CHECKSUM_MODES:
+            raise ValueError(f"Unsupported fwupdata checksum mode: {options.checksum}")
+
+        logger.info(
+            "Sending %s (%d bytes) via fwupdata type %d",
+            label,
+            len(data),
+            fw_type,
+        )
+
+        self._reset_input_buffer()
+        command_attempts = (
+            BOOT_FWUPDATA + f" {fw_type}\r\n".encode(),
+            BOOT_FWUPDATA + b"\r\n",
+        )
+        for attempt, cmd in enumerate(command_attempts, start=1):
+            self._monitor_serial("TX", cmd)
+            self._serial.write(cmd)
+
+            raw = self._read_until_any(
+                markers=(
+                    MARKER_FWUPDATA_MODE_V2,
+                    b"Unknown command",
+                    b"+ERR",
+                    MARKER_ERROR,
+                ),
+                timeout=self._boot_timeout,
+                expected_length=4096,
+            )
+            if MARKER_FWUPDATA_MODE_V2 in raw:
+                break
+
+            rejected = (
+                b"Unknown command" in raw
+                or b"+ERR" in raw
+                or MARKER_ERROR in raw
+            )
+            if rejected and attempt < len(command_attempts):
+                logger.debug("Typed fwupdata command rejected; retrying bare command")
+                continue
+
+            resp = _parse_response(raw)
+            raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
+
+        total_sent = 0
+        last_ack: FwupdataAck | None = None
+        chunk_size = FWUPDATA_CHUNK_SIZE
+        total_chunks = (len(data) + chunk_size - 1) // chunk_size
+
+        for index, offset in enumerate(range(0, len(data), chunk_size), start=1):
+            chunk = data[offset : offset + chunk_size]
+            is_last = offset + len(chunk) >= len(data)
+            flags = options.last_flags if is_last else options.normal_flags
+            packet = _build_fwupdata_packet(
+                chunk,
+                offset=offset,
+                fw_type=fw_type,
+                flags=flags,
+                msg_id=options.msg_id,
+                checksum=options.checksum,
+            )
+            checksum_value = struct.unpack_from("<H", packet, 10)[0]
+            logger.debug(
+                "Sending %s fwupdata chunk %d/%d offset=0x%06X len=%d "
+                "flags=0x%02X checksum=0x%04X",
+                label,
+                index,
+                total_chunks,
+                offset,
+                len(chunk),
+                flags,
+                checksum_value,
+            )
+            self._monitor_binary(
+                "TX",
+                packet,
+                (
+                    f"{label} packet offset=0x{offset:06X} len={len(chunk)} "
+                    f"flags=0x{flags:02X} csum=0x{checksum_value:04X}"
+                ),
+            )
+            self._serial.write(packet)
+
+            ack_raw = self._read_exact(16, timeout=self._send_timeout, label="fwupdata ack")
+            self._monitor_binary("RX", ack_raw, f"{label} ack offset=0x{offset:06X}")
+            ack = _parse_fwupdata_ack(ack_raw)
+            last_ack = ack
+            if ack.result != 0:
+                result_name = FWUPDATA_RESULT_NAMES.get(ack.result, f"result {ack.result}")
+                raise RuntimeError(
+                    f"{label} fwupdata failed at offset 0x{offset:06X}: "
+                    f"state={ack.state} result={ack.result} ({result_name})"
+                )
+
+            total_sent += len(chunk)
+            if self._progress_callback:
+                self._progress_callback(total_sent, len(data))
+
+        raw_ack = last_ack.raw if last_ack is not None else raw
+        return BootloaderResponse(
+            raw=raw_ack,
+            is_ok=True,
+            is_download_success=True,
+            text=f"{label} fwupdata complete",
+        )
+
     def reboot(self) -> BootloaderResponse:
         """Reboot the chip after firmware download.
 
@@ -612,6 +912,67 @@ class BootloaderProtocol:
             CODE2_ADDR,
         )
         return self.send_firmware(data, addr=CODE2_ADDR)
+
+    def send_code1_fwupdata(
+        self,
+        path: str,
+        options: FwupdataOptions | None = None,
+    ) -> BootloaderResponse:
+        """Send CODE1 through the raw bootloader ``fwupdata`` protocol."""
+        if options is None:
+            options = FwupdataOptions()
+        logger.info("Loading CODE1 from %s", path)
+        with open(path, "rb") as f:
+            data = f.read()
+        return self.send_fwupdata_file(
+            data,
+            fw_type=options.code1_type,
+            label="CODE1",
+            options=options,
+        )
+
+    def send_code2_fwupdata(
+        self,
+        path: str,
+        options: FwupdataOptions | None = None,
+    ) -> BootloaderResponse:
+        """Send CODE2 through the raw bootloader ``fwupdata`` protocol."""
+        if options is None:
+            options = FwupdataOptions()
+        logger.info("Loading CODE2 from %s", path)
+        with open(path, "rb") as f:
+            data = f.read()
+        return self.send_fwupdata_file(
+            data,
+            fw_type=options.code2_type,
+            label="CODE2",
+            options=options,
+        )
+
+    def boot_from_prompt(self) -> BootloaderResponse:
+        """Run the raw bootloader ``boot`` command."""
+        logger.info("Sending boot command from raw bootloader prompt...")
+        self._monitor_serial("TX", BOOT_BOOT)
+        self._serial.write(BOOT_BOOT)
+        try:
+            raw = self._read_until_any(
+                markers=(
+                    MARKER_BOOTLOADER_MODE,
+                    MARKER_ROM_CODE_MODE,
+                    MARKER_BOOT_PROMPT,
+                    MARKER_OK,
+                    MARKER_ERROR,
+                ),
+                timeout=2.0,
+                expected_length=4096,
+            )
+            resp = _parse_response(raw)
+            if not resp.is_error:
+                resp.is_ok = True
+            return resp
+        except TimeoutError:
+            logger.info("No response after boot command (chip may have started firmware)")
+            return BootloaderResponse(raw=b"", is_ok=True, text="boot sent")
 
     def write_memory(self, address: int, value: int) -> BootloaderResponse:
         """Write a 32-bit value to memory via AT+wmem.
@@ -1006,6 +1367,69 @@ class BootloaderProtocol:
         results.append(resp)
 
         logger.info("=== Firmware burn complete ===")
+        return resp
+
+    def burn_firmware_fwupdata(
+        self,
+        spec: FirmwareSpec,
+        reboot: bool = True,
+        options: FwupdataOptions | None = None,
+    ) -> BootloaderResponse:
+        """Burn CODE1/CODE2 from the raw bootloader ``fwupdata`` prompt."""
+        if options is None:
+            options = FwupdataOptions()
+
+        if spec.bootloader:
+            raise ValueError(
+                "Raw fwupdata manual mode does not support --bootloader yet"
+            )
+        if spec.keyfile or spec.mac:
+            raise ValueError(
+                "Raw fwupdata manual mode supports CODE1/CODE2 only; "
+                "omit --keyfile/--mac"
+            )
+
+        logger.info("=== Starting raw fwupdata firmware burn ===")
+        logger.info("  code1: %s", spec.code1 or "N/A")
+        logger.info("  code2: %s", spec.code2 or "N/A")
+        logger.info(
+            "  fwupdata options: msg_id=0x%04X code1_type=%d code2_type=%d "
+            "flags=0x%02X/0x%02X checksum=%s",
+            options.msg_id,
+            options.code1_type,
+            options.code2_type,
+            options.normal_flags,
+            options.last_flags,
+            options.checksum,
+        )
+
+        results: list[BootloaderResponse] = []
+
+        if spec.code1:
+            logger.info("--- Step 1: CODE1 (ICCM) fwupdata ---")
+            resp = self.send_code1_fwupdata(spec.code1, options=options)
+            results.append(resp)
+
+        if spec.code2:
+            logger.info("--- Step 2: CODE2 (Flash) fwupdata ---")
+            resp = self.send_code2_fwupdata(spec.code2, options=options)
+            results.append(resp)
+
+        if not results:
+            return BootloaderResponse(
+                raw=b"",
+                is_ok=True,
+                text="No CODE1/CODE2 images specified",
+            )
+
+        if not reboot:
+            logger.info("Skipping boot command after raw fwupdata burn")
+            return results[-1]
+
+        logger.info("--- Step 3: Boot ---")
+        resp = self.boot_from_prompt()
+        results.append(resp)
+        logger.info("=== Raw fwupdata firmware burn complete ===")
         return resp
 
     def _burn_key(self, spec: FirmwareSpec) -> BootloaderResponse:

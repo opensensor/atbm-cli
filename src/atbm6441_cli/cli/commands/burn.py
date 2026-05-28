@@ -22,14 +22,20 @@ from tqdm import tqdm
 from ...protocol.bootloader import (
     BootloaderProtocol,
     FirmwareSpec,
+    FwupdataOptions,
     BootloaderResponse,
     BOOTLOADER_ADDR,
     CODE1_ADDR,
     CODE2_ADDR,
+    FWUPDATA_CHECKSUM_MODES,
 )
 from ...protocol.uart import SerialManager
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_int(value: str) -> int:
+    return int(value, 0)
 
 
 def burn_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -127,6 +133,42 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--json", action="store_true", help="JSON output mode"
+    )
+    p.add_argument(
+        "--fwupdata-msg-id",
+        type=_parse_int,
+        default=0,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--fwupdata-code1-type",
+        type=_parse_int,
+        default=1,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--fwupdata-code2-type",
+        type=_parse_int,
+        default=2,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--fwupdata-normal-flags",
+        type=_parse_int,
+        default=0,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--fwupdata-last-flags",
+        type=_parse_int,
+        default=1,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
+        "--fwupdata-checksum",
+        choices=FWUPDATA_CHECKSUM_MODES,
+        default="sum-bytes",
+        help=argparse.SUPPRESS,
     )
     p.set_defaults(handler=burn_handler)
 
@@ -271,7 +313,22 @@ def burn_handler(args: argparse.Namespace) -> int:
             )
 
         print("Burning firmware...")
-        result = bp.burn_firmware(spec, reboot=not args.no_reboot)
+        if args.manual_mode:
+            fwupdata_options = FwupdataOptions(
+                msg_id=args.fwupdata_msg_id,
+                code1_type=args.fwupdata_code1_type,
+                code2_type=args.fwupdata_code2_type,
+                normal_flags=args.fwupdata_normal_flags,
+                last_flags=args.fwupdata_last_flags,
+                checksum=args.fwupdata_checksum,
+            )
+            result = bp.burn_firmware_fwupdata(
+                spec,
+                reboot=not args.no_reboot,
+                options=fwupdata_options,
+            )
+        else:
+            result = bp.burn_firmware(spec, reboot=not args.no_reboot)
 
         if args.json:
             output = {
