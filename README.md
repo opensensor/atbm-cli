@@ -74,8 +74,26 @@ atbm6441-cli burn \
 | `--flashcode` | CODE2 flash image (fw_update2.bin) | optional |
 | `--keyfile` | KEY file (CSV/TXT) | optional |
 | `--mac` | MAC address to burn | optional |
+| `--manual-mode` | Assume the chip is already at the bootloader prompt | — |
+| `--no-reboot` | Do not send `AT+REBOOT` after download | — |
+| `--serial-monitor` | Mirror bootloader TX/RX to stderr | — |
 | `--json` | JSON output mode | — |
 | `--log-level`, `-l` | Log level (debug/info/warn/error) | info |
+
+### No-reboot firmware patch helper
+
+The helper below patches known reset/WDT reboot paths in a corrected
+little-endian flash dump and emits both a full image and bootloader burn images.
+It does not require committing firmware blobs to git.
+
+```bash
+python tools/patch_no_reboot.py firmware_dump_le.bin
+
+atbm6441-cli burn --manual-mode --no-reboot --serial-monitor \
+  --port COM6 \
+  --firmware firmware_analysis/code1_original.bin \
+  --flashcode firmware_analysis/code2_no_reboot.bin
+```
 
 ### `key` — Burn KEY data
 
