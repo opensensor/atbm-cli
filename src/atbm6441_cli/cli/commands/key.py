@@ -76,6 +76,7 @@ def key_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--json", action="store_true", help="JSON output mode"
     )
+    p.set_defaults(handler=key_handler)
 
 
 def key_handler(args: argparse.Namespace) -> int:

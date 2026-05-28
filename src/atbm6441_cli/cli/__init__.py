@@ -66,28 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Dispatch to the appropriate handler
-    command = getattr(args, "command", None)
-    subcommand = getattr(args, "subcommand", None)
+    handler = getattr(args, "handler", None)
+    if handler:
+        return handler(args)
 
-    if command == "burn":
-        return burn_handler(args)
-    elif command == "verify":
-        return verify_handler(args)
-    elif command == "read":
-        return read_handler(args)
-    elif command == "write":
-        return write_handler(args)
-    elif command == "chip":
-        return chip_handler(args, subcommand)
-    elif command == "key":
-        return key_handler(args)
-    elif command == "info":
-        return info_handler(args)
-    elif command == "mem":
-        return mem_handler(args)
-    else:
-        parser.print_help()
-        return 1
+    parser.print_help()
+    return 1
 
 
 if __name__ == "__main__":

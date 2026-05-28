@@ -19,6 +19,7 @@ def write_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     p.add_argument("--json", action="store_true", help="JSON output mode")
+    p.set_defaults(handler=write_handler)
 
 
 def write_handler(args: argparse.Namespace) -> int:

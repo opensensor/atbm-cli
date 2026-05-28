@@ -70,6 +70,7 @@ def mem_parser(subparsers: argparse._SubParsersAction) -> None:
         choices=["debug", "info", "warn", "error"],
         help="Log level",
     )
+    p.set_defaults(handler=mem_handler)
 
 
 def mem_handler(args: argparse.Namespace) -> int:

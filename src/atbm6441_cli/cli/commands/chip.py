@@ -25,6 +25,7 @@ def chip_parser(subparsers: argparse._SubParsersAction) -> None:
     chipid_p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     chipid_p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     chipid_p.add_argument("--json", action="store_true", help="JSON output mode")
+    chipid_p.set_defaults(handler=lambda args: chip_handler(args, "chipid"))
 
     # info
     info_p = sub.add_parser("info", help="Query firmware version via AT command")
@@ -35,6 +36,7 @@ def chip_parser(subparsers: argparse._SubParsersAction) -> None:
     info_p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     info_p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     info_p.add_argument("--json", action="store_true", help="JSON output mode")
+    info_p.set_defaults(handler=lambda args: chip_handler(args, "info"))
 
     # read-mac
     read_mac_p = sub.add_parser("read-mac", help="Display the current MAC address")
@@ -45,6 +47,7 @@ def chip_parser(subparsers: argparse._SubParsersAction) -> None:
     read_mac_p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     read_mac_p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     read_mac_p.add_argument("--json", action="store_true", help="JSON output mode")
+    read_mac_p.set_defaults(handler=lambda args: chip_handler(args, "read-mac"))
 
     # burn-mac
     burn_mac_p = sub.add_parser("burn-mac", help="Burn a MAC address to the chip")
@@ -57,6 +60,7 @@ def chip_parser(subparsers: argparse._SubParsersAction) -> None:
     burn_mac_p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     burn_mac_p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     burn_mac_p.add_argument("--json", action="store_true", help="JSON output mode")
+    burn_mac_p.set_defaults(handler=lambda args: chip_handler(args, "burn-mac"))
 
     # flash-id
     flash_id_p = sub.add_parser("flash-id", help="Read flash JEDEC ID and determine size")
@@ -65,6 +69,7 @@ def chip_parser(subparsers: argparse._SubParsersAction) -> None:
     flash_id_p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     flash_id_p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     flash_id_p.add_argument("--json", action="store_true", help="JSON output mode")
+    flash_id_p.set_defaults(handler=lambda args: chip_handler(args, "flash-id"))
 
 
 def chip_handler(args: argparse.Namespace, subcommand: str) -> int:

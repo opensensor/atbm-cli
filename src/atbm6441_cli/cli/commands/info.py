@@ -59,6 +59,7 @@ def info_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--json", action="store_true", help="JSON output mode"
     )
+    p.set_defaults(handler=info_handler)
 
 
 def info_handler(args: argparse.Namespace) -> int:
@@ -90,8 +91,8 @@ def info_handler(args: argparse.Namespace) -> int:
             "gmr": ("AT+GMR", bp.get_modem_info),
             "sdk": ("AT+GET_SDK_VER", bp.get_sdk_version),
             "venver": ("AT+VENVER", bp.get_hw_version),
-            "fwinfo": ("AT+WIFI_GET_FWINFO", bp.get_modem_info),
-            "status": ("AT+WIFI_STATUS", bp.get_modem_info),
+            "fwinfo": ("AT+WIFI_GET_FWINFO", bp.get_fw_info),
+            "status": ("AT+WIFI_STATUS", bp.get_wifi_status),
         }
 
         if args.command == "all":
