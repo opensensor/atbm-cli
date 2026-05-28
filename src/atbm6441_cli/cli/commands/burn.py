@@ -85,6 +85,7 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--tx-delay-ms",
+        "--tx_delay_ms",
         default=0,
         type=int,
         help="Milliseconds to delay before each fwupdata packet send (simulates ETF_TxDelayBetweenTwoFrames)",
@@ -124,21 +125,25 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--manual-mode",
+        "--manual_mode",
         action="store_true",
         help="Skip auto GPIO control; user handles reset manually",
     )
     p.add_argument(
         "--no-reboot",
+        "--no_reboot",
         action="store_true",
         help="Do not send AT+REBOOT after downloading firmware",
     )
     p.add_argument(
         "--serial-monitor",
+        "--serial_monitor",
         action="store_true",
         help="Mirror bootloader TX/RX bytes to stderr",
     )
     p.add_argument(
         "--no-flash-protect",
+        "--no_flash_protect",
         action="store_true",
         help="Disable flash write protection before burn",
     )

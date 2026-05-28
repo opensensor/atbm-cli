@@ -257,6 +257,18 @@ class TestBootloaderProtocol:
         with pytest.raises(RuntimeError, match="DOWNLOAD_ERR_CHECKSUM"):
             bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
 
+    def test_send_fwupdata_file_aborts_on_text_mode_error(
+        self, mock_serial: MagicMock
+    ) -> None:
+        mock_serial.read.side_effect = [
+            MARKER_FWUPDATA_MODE_V2 + b"\r\n",
+            b"Unknown command\r\n",
+        ]
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0, send_timeout=1.0)
+
+        with pytest.raises(RuntimeError, match="left fwupdata mode"):
+            bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
+
     def test_burn_firmware_fwupdata_code2_only(self, mock_serial: MagicMock) -> None:
         ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
         mock_serial.read.side_effect = [MARKER_FWUPDATA_MODE_V2 + b"\r\n", ack]

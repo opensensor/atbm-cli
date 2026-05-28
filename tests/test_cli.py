@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+from atbm6441_cli.cli import create_parser
+
 
 def test_cli_help():
     """Verify CLI help output lists all subcommands."""
@@ -30,6 +32,30 @@ def test_burn_help():
     assert "--firmware" in result.stdout
     assert "--port" in result.stdout
     assert "--baud" in result.stdout
+
+
+def test_burn_underscore_aliases_parse():
+    """Verify copied underscore burn flags map to canonical argparse dests."""
+    parser = create_parser()
+    args = parser.parse_args(
+        [
+            "burn",
+            "--manual_mode",
+            "--no_reboot",
+            "--serial_monitor",
+            "--tx_delay_ms",
+            "2",
+            "--firmware",
+            "code1_original.bin",
+            "--flashcode",
+            "code2_no_reboot.bin",
+        ]
+    )
+
+    assert args.manual_mode is True
+    assert args.no_reboot is True
+    assert args.serial_monitor is True
+    assert args.tx_delay_ms == 2
 
 
 def test_chip_subcommands():

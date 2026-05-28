@@ -685,6 +685,49 @@ class BootloaderProtocol:
 
         return bytes(result[:length])
 
+    def _read_fwupdata_ack(self, timeout: float) -> bytes:
+        """Read a binary fwupdata ACK, rejecting text-mode bootloader errors."""
+        text_markers = (b"Unknown command", b"+ERR", MARKER_ERROR)
+        start_time = time.time()
+        last_idle_report = start_time
+        result = bytearray()
+
+        while len(result) < 16:
+            if any(marker in result for marker in text_markers):
+                resp = _parse_response(bytes(result))
+                raise RuntimeError(f"Bootloader left fwupdata mode: {resp.text}")
+
+            now = time.time()
+            if now - start_time > timeout:
+                partial = bytes(result)
+                if any(marker in partial for marker in text_markers):
+                    resp = _parse_response(partial)
+                    raise RuntimeError(f"Bootloader left fwupdata mode: {resp.text}")
+                raise TimeoutError(
+                    "Timeout waiting for fwupdata ack: "
+                    f"got {len(result)}/16 bytes; "
+                    f"partial={_format_serial_bytes(partial, limit=128)}"
+                )
+
+            remaining = 16 - len(result)
+            chunk = self._serial.read(length=remaining, timeout=min(0.1, timeout))
+            if not chunk:
+                now = time.time()
+                if now - last_idle_report >= 5.0:
+                    self._monitor_idle(now - start_time, (b"fwupdata ack",), len(result))
+                    last_idle_report = now
+                time.sleep(0.01)
+                continue
+
+            self._monitor_binary("RX", chunk, "fwupdata ack partial")
+            result.extend(chunk)
+
+        ack = bytes(result[:16])
+        if any(marker in ack for marker in text_markers):
+            resp = _parse_response(ack)
+            raise RuntimeError(f"Bootloader left fwupdata mode: {resp.text}")
+        return ack
+
     def send_fwupdata_file(
         self,
         data: bytes,
@@ -729,6 +772,8 @@ class BootloaderProtocol:
             raise ValueError(f"Unsupported fwupdata checksum mode: {options.checksum}")
         if options.packet_delay_ms < 0:
             raise ValueError("fwupdata packet delay must be non-negative")
+        if options.tx_delay_ms < 0:
+            raise ValueError("fwupdata TX delay must be non-negative")
         if not images:
             return BootloaderResponse(
                 raw=b"",
@@ -824,11 +869,7 @@ class BootloaderProtocol:
                     time.sleep(options.tx_delay_ms / 1000.0)
                 self._serial.write(packet)
 
-                ack_raw = self._read_exact(
-                    16,
-                    timeout=self._send_timeout,
-                    label="fwupdata ack",
-                )
+                ack_raw = self._read_fwupdata_ack(timeout=self._send_timeout)
                 self._monitor_binary(
                     "RX",
                     ack_raw,
