@@ -54,8 +54,8 @@ def read_handler(args: argparse.Namespace) -> int:
             serial.open()  # triggers auto-detect
 
         # Enter bootloader mode and create protocol instance
-        bootloader = BootloaderProtocol(serial)
-        bootloader.enter_bootloader(timeout=args.boot_timeout)
+        bootloader = BootloaderProtocol(serial, boot_timeout=args.boot_timeout)
+        bootloader.enter_bootloader()
 
         flash_size = int(args.flash_size, 16) if args.flash_size else None
         reader = FlashReader(serial, flash_size=flash_size, bootloader=bootloader)
