@@ -144,7 +144,7 @@ class TestSerialManager:
             mgr.open()
             data = mgr.read(length=8)
             assert data == b"response"
-            mock_serial.read.assert_called_once_with(length=8)
+            mock_serial.read.assert_called_once_with(size=8)
 
     def test_read_until(self, mock_serial):
         """Test reading until sentinel."""

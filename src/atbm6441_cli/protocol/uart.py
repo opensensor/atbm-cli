@@ -101,7 +101,7 @@ class SerialManager:
             raise RuntimeError("Serial port is not open. Call open() first.")
 
         effective_timeout = timeout if timeout is not None else self._timeout
-        return self._serial.read(length=length)
+        return self._serial.read(size=length)
 
     def read_until(
         self,
