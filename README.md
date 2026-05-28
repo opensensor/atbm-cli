@@ -71,6 +71,7 @@ atbm6441-cli burn \
 | `--at-baud` | AT command baud rate | 115200 |
 | `--boot-timeout` | Seconds to wait for bootloader prompt/mode banner | 30 |
 | `--send-timeout` | Seconds to wait for each firmware transfer response | 120 |
+| `--packet-delay-ms` | Pause between raw `fwupdata` packets | 0 |
 | `--firmware`, `-f` | CODE1 firmware (fw_update1.bin) | optional |
 | `--bootloader`, `-F` | Bootloader image | optional |
 | `--flashcode` | CODE2 flash image (fw_update2.bin) | optional |

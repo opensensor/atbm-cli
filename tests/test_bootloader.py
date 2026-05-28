@@ -303,6 +303,22 @@ class TestBootloaderProtocol:
         assert writes[0] == b"fwupdata\n"
         assert len(writes[1]) == FWUPDATA_PACKET_SIZE
 
+    def test_send_fwupdata_file_packet_delay(self, mock_serial: MagicMock) -> None:
+        ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
+        mock_serial.read.side_effect = [MARKER_FWUPDATA_MODE_V2 + b"\r\n", ack, ack]
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0, send_timeout=1.0)
+
+        with patch("atbm6441_cli.protocol.bootloader.time.sleep") as sleep_mock:
+            resp = bp.send_fwupdata_file(
+                b"\xAA" * 4097,
+                fw_type=2,
+                label="CODE2",
+                options=FwupdataOptions(packet_delay_ms=25),
+            )
+
+        assert resp.is_download_success is True
+        sleep_mock.assert_called_once_with(0.025)
+
     def test_burn_firmware_fwupdata_rejects_keyfile(self, mock_serial: MagicMock) -> None:
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         spec = FirmwareSpec(code2="/tmp/code2.bin", keyfile="/tmp/key.txt")

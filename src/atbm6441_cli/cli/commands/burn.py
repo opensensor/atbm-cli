@@ -78,6 +78,12 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Seconds to wait for each firmware transfer response",
     )
     p.add_argument(
+        "--packet-delay-ms",
+        default=0,
+        type=int,
+        help="Milliseconds to pause between fwupdata packets",
+    )
+    p.add_argument(
         "--firmware",
         "-f",
         type=str,
@@ -327,6 +333,7 @@ def burn_handler(args: argparse.Namespace) -> int:
                 normal_flags=args.fwupdata_normal_flags,
                 last_flags=args.fwupdata_last_flags,
                 checksum=args.fwupdata_checksum,
+                packet_delay_ms=args.packet_delay_ms,
             )
             result = bp.burn_firmware_fwupdata(
                 spec,

@@ -131,6 +131,7 @@ class FwupdataOptions:
     normal_flags: int = FWUPDATA_FLAGS_DATA
     last_flags: int = FWUPDATA_FLAGS_LAST
     checksum: str = "sum-bytes"
+    packet_delay_ms: int = 0
 
 
 @dataclass
@@ -700,6 +701,8 @@ class BootloaderProtocol:
             options = FwupdataOptions()
         if options.checksum not in FWUPDATA_CHECKSUM_MODES:
             raise ValueError(f"Unsupported fwupdata checksum mode: {options.checksum}")
+        if options.packet_delay_ms < 0:
+            raise ValueError("fwupdata packet delay must be non-negative")
 
         logger.info(
             "Sending %s (%d bytes) via fwupdata type %d",
@@ -791,6 +794,8 @@ class BootloaderProtocol:
             total_sent += len(chunk)
             if self._progress_callback:
                 self._progress_callback(total_sent, len(data))
+            if options.packet_delay_ms and not is_last:
+                time.sleep(options.packet_delay_ms / 1000.0)
 
         raw_ack = last_ack.raw if last_ack is not None else raw
         return BootloaderResponse(
