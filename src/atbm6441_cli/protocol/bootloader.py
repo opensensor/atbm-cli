@@ -77,6 +77,7 @@ BOOT_BOOT = b"boot\r\n"
 FWUPDATA_CHUNK_SIZE = 4096
 FWUPDATA_PACKET_SIZE = 4108
 FWUPDATA_HEADER_SIZE = 12
+FWUPDATA_MODE_SWITCH_TIMEOUT = 3.0
 FWUPDATA_DEFAULT_MSG_ID = 0
 FWUPDATA_CODE1_TYPE = 1
 FWUPDATA_CODE2_TYPE = 2
@@ -705,44 +706,34 @@ class BootloaderProtocol:
         )
 
         self._reset_input_buffer()
-        command_attempts = (
-            BOOT_FWUPDATA + f" {fw_type}\r\n".encode(),
-            BOOT_FWUPDATA + b"\r\n",
-        )
-        for attempt, cmd in enumerate(command_attempts, start=1):
-            self._monitor_serial("TX", cmd)
-            self._serial.write(cmd)
+        raw = b""
+        cmd = BOOT_FWUPDATA + b"\n"
+        self._monitor_serial("TX", cmd)
+        self._serial.write(cmd)
 
-            try:
-                raw = self._read_until_any(
-                    markers=(
-                        MARKER_FWUPDATA_MODE_V2,
-                        b"Unknown command",
-                        b"+ERR",
-                        MARKER_ERROR,
-                    ),
-                    timeout=self._boot_timeout,
-                    expected_length=4096,
-                )
-            except TimeoutError:
-                if attempt < len(command_attempts):
-                    logger.debug("Typed fwupdata command timed out; retrying bare command")
-                    continue
-                raise
-            if MARKER_FWUPDATA_MODE_V2 in raw:
-                break
-
-            rejected = (
+        try:
+            raw = self._read_until_any(
+                markers=(
+                    MARKER_FWUPDATA_MODE_V2,
+                    b"Unknown command",
+                    b"+ERR",
+                    MARKER_ERROR,
+                ),
+                timeout=min(self._boot_timeout, FWUPDATA_MODE_SWITCH_TIMEOUT),
+                expected_length=4096,
+            )
+        except TimeoutError:
+            logger.warning(
+                "No fwupdata mode banner; assuming bootloader entered binary message mode"
+            )
+        else:
+            if (
                 b"Unknown command" in raw
                 or b"+ERR" in raw
                 or MARKER_ERROR in raw
-            )
-            if rejected and attempt < len(command_attempts):
-                logger.debug("Typed fwupdata command rejected; retrying bare command")
-                continue
-
-            resp = _parse_response(raw)
-            raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
+            ):
+                resp = _parse_response(raw)
+                raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
 
         total_sent = 0
         last_ack: FwupdataAck | None = None

@@ -245,7 +245,7 @@ class TestBootloaderProtocol:
 
         assert resp.is_download_success is True
         writes = [call[0][0] for call in mock_serial.write.call_args_list]
-        assert writes[0] == b"fwupdata 2\r\n"
+        assert writes[0] == b"fwupdata\n"
         assert len(writes[1]) == FWUPDATA_PACKET_SIZE
         assert struct.unpack_from("<HHIBB", writes[1], 0) == (2, 0, 0, 1, 2)
 
@@ -268,46 +268,40 @@ class TestBootloaderProtocol:
 
         assert resp.is_download_success is True
         writes = [call[0][0] for call in mock_serial.write.call_args_list]
-        assert writes[0] == b"fwupdata 2\r\n"
+        assert writes[0] == b"fwupdata\n"
         assert all(write != AT_SEND for write in writes)
 
-    def test_send_fwupdata_file_falls_back_to_bare_command(
+    def test_send_fwupdata_file_rejects_unknown_command(
         self, mock_serial: MagicMock
     ) -> None:
-        ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
-        mock_serial.read.side_effect = [
-            b"Unknown command\r\n",
-            MARKER_FWUPDATA_MODE_V2 + b"\r\n",
-            ack,
-        ]
+        mock_serial.read.return_value = b"Unknown command\r\n"
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0, send_timeout=1.0)
 
-        resp = bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
+        with pytest.raises(RuntimeError, match="rejected fwupdata"):
+            bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
 
-        assert resp.is_download_success is True
         writes = [call[0][0] for call in mock_serial.write.call_args_list]
-        assert writes[0] == b"fwupdata 2\r\n"
-        assert writes[1] == b"fwupdata\r\n"
-        assert len(writes[2]) == FWUPDATA_PACKET_SIZE
+        assert writes == [b"fwupdata\n"]
 
-    def test_send_fwupdata_file_falls_back_to_bare_command_on_timeout(
+    def test_send_fwupdata_file_assumes_binary_mode_on_banner_timeout(
         self, mock_serial: MagicMock
     ) -> None:
         ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
-        mock_serial.read.side_effect = [
-            b"",
-            MARKER_FWUPDATA_MODE_V2 + b"\r\n",
-            ack,
-        ]
+
+        def _read(length: int, timeout: float) -> bytes:
+            if length == 16:
+                return ack
+            return b""
+
+        mock_serial.read.side_effect = _read
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=0.01, send_timeout=1.0)
 
         resp = bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
 
         assert resp.is_download_success is True
         writes = [call[0][0] for call in mock_serial.write.call_args_list]
-        assert writes[0] == b"fwupdata 2\r\n"
-        assert writes[1] == b"fwupdata\r\n"
-        assert len(writes[2]) == FWUPDATA_PACKET_SIZE
+        assert writes[0] == b"fwupdata\n"
+        assert len(writes[1]) == FWUPDATA_PACKET_SIZE
 
     def test_burn_firmware_fwupdata_rejects_keyfile(self, mock_serial: MagicMock) -> None:
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
