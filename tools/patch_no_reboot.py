@@ -18,6 +18,9 @@ CODE1_END = 0x040000
 CODE2_START = 0x040000
 CODE2_END = 0x1FFE18
 CODE2_ZLIB_OFFSET = 0x284000
+IOT_UPDATE_TRAILER_SIZE = 24
+IOT_UPDATE_CHECKSUM_OFFSET = 8
+BOOT_VALID_FLAG = 0x32A7
 
 RETURN_STUB = bytes.fromhex("8280010001000100")
 
@@ -46,6 +49,43 @@ def consume_zlib_stream(data: bytes) -> tuple[bytes, int]:
     return plain, consumed
 
 
+def fw_chksum(data: bytes) -> int:
+    """Match the SDK fw_chksum() little-endian 16-bit word sum."""
+    total = 0
+    end = len(data) - (len(data) % 2)
+    for i in range(0, end, 2):
+        total = (total + data[i] + (data[i + 1] << 8)) & 0xFFFF
+    if len(data) % 2:
+        total = (total + data[-1]) & 0xFFFF
+    return total
+
+
+def update_code2_trailer(code1: bytes, code2: bytes) -> tuple[bytes, str]:
+    """Recalculate the fw_update2 trailer checksum after patching CODE2."""
+    if len(code2) < IOT_UPDATE_TRAILER_SIZE:
+        raise ValueError("CODE2 image is too small to contain an update trailer")
+
+    patched = bytearray(code2)
+    trailer_offset = len(patched) - IOT_UPDATE_TRAILER_SIZE
+    flag = int.from_bytes(patched[trailer_offset : trailer_offset + 4], "little")
+    if flag != BOOT_VALID_FLAG:
+        raise ValueError(
+            f"CODE2 update trailer flag was 0x{flag:08x}, "
+            f"expected 0x{BOOT_VALID_FLAG:08x}"
+        )
+
+    checksum_offset = trailer_offset + IOT_UPDATE_CHECKSUM_OFFSET
+    old_checksum = int.from_bytes(patched[checksum_offset : checksum_offset + 4], "little")
+    patched[checksum_offset : checksum_offset + 4] = b"\x00\x00\x00\x00"
+    new_checksum = (fw_chksum(code1) + fw_chksum(patched)) & 0xFFFF
+    patched[checksum_offset : checksum_offset + 4] = new_checksum.to_bytes(4, "little")
+
+    return (
+        bytes(patched),
+        f"CODE2 update trailer checksum: 0x{old_checksum:04x} -> 0x{new_checksum:04x}",
+    )
+
+
 def patch_image(image: bytearray, force: bool = False) -> list[str]:
     notes: list[str] = []
     for name, offset, old_bytes in PATCHES:
@@ -70,7 +110,14 @@ def write_outputs(input_path: Path, output_dir: Path, force: bool) -> None:
 
     notes = patch_image(image, force=force)
 
-    code2 = bytes(image[CODE2_START:CODE2_END])
+    code1 = bytes(image[CODE1_START:CODE1_END])
+    code2, trailer_note = update_code2_trailer(
+        code1,
+        bytes(image[CODE2_START:CODE2_END]),
+    )
+    image[CODE2_START:CODE2_END] = code2
+    notes.append(trailer_note)
+
     mirror_plain, mirror_consumed = consume_zlib_stream(bytes(image[CODE2_ZLIB_OFFSET:]))
     if len(mirror_plain) != len(code2):
         raise ValueError(

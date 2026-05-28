@@ -88,6 +88,7 @@ atbm6441-cli burn \
 
 The helper below patches known reset/WDT reboot paths in a corrected
 little-endian flash dump and emits both a full image and bootloader burn images.
+It also recalculates the `fw_update2` trailer checksum after patching.
 It does not require committing firmware blobs to git.
 
 ```bash
@@ -95,6 +96,7 @@ python tools/patch_no_reboot.py firmware_dump_le.bin
 
 atbm6441-cli burn --manual-mode --no-reboot --serial-monitor \
   --port COM6 \
+  --firmware firmware_analysis/code1_original.bin \
   --flashcode firmware_analysis/code2_no_reboot.bin
 ```
 
