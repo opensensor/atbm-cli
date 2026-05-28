@@ -100,6 +100,16 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Skip auto GPIO control; user handles reset manually",
     )
     p.add_argument(
+        "--no-reboot",
+        action="store_true",
+        help="Do not send AT+REBOOT after downloading firmware",
+    )
+    p.add_argument(
+        "--serial-monitor",
+        action="store_true",
+        help="Mirror bootloader TX/RX bytes to stderr",
+    )
+    p.add_argument(
         "--no-flash-protect",
         action="store_true",
         help="Disable flash write protection before burn",
@@ -203,6 +213,7 @@ def burn_handler(args: argparse.Namespace) -> int:
         chunk_size=1024,
         send_timeout=30.0,
         boot_timeout=args.boot_timeout,
+        serial_monitor=args.serial_monitor,
     )
 
     # Progress bar
@@ -234,14 +245,23 @@ def burn_handler(args: argparse.Namespace) -> int:
         sm.open()
         print("Serial port opened successfully")
 
-        print("Entering bootloader mode...")
-        enter_resp = bp.enter_bootloader()
-        print(
-            f"  Mode: {'bootloader' if enter_resp.is_bootloader_mode else 'rom code'}"
-        )
+        if args.manual_mode:
+            print("Manual mode: assuming the device is already at the bootloader prompt.")
+            enter_resp = BootloaderResponse(
+                raw=b"",
+                is_ok=True,
+                is_bootloader_mode=True,
+                text="manual mode",
+            )
+        else:
+            print("Entering bootloader mode...")
+            enter_resp = bp.enter_bootloader()
+            print(
+                f"  Mode: {'bootloader' if enter_resp.is_bootloader_mode else 'rom code'}"
+            )
 
         print("Burning firmware...")
-        result = bp.burn_firmware(spec)
+        result = bp.burn_firmware(spec, reboot=not args.no_reboot)
 
         if args.json:
             output = {

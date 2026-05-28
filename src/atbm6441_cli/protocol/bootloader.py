@@ -892,13 +892,14 @@ class BootloaderProtocol:
 
         return _parse_response(raw)
 
-    def burn_firmware(self, spec: FirmwareSpec) -> BootloaderResponse:
+    def burn_firmware(self, spec: FirmwareSpec, reboot: bool = True) -> BootloaderResponse:
         """Burn all specified firmware images in sequence.
 
         Order: bootloader → KEY → CODE1 → CODE2 → reboot
 
         Args:
             spec: Firmware specification.
+            reboot: Send AT+REBOOT after all images are downloaded.
 
         Returns:
             BootloaderResponse with final status.
@@ -951,6 +952,14 @@ class BootloaderProtocol:
             if not resp.is_download_success:
                 logger.error("CODE2 download failed: %s", resp.text)
                 return resp
+
+        if not reboot:
+            logger.info("Skipping reboot after firmware burn")
+            return results[-1] if results else BootloaderResponse(
+                raw=b"",
+                is_ok=True,
+                text="No firmware images specified",
+            )
 
         # 5. Reboot
         logger.info("--- Step 5: Reboot ---")
