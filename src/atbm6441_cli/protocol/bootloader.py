@@ -661,8 +661,10 @@ class BootloaderProtocol:
         while len(result) < length:
             now = time.time()
             if now - start_time > timeout:
+                partial = bytes(result)
                 raise TimeoutError(
-                    f"Timeout waiting for {label}: got {len(result)}/{length} bytes"
+                    f"Timeout waiting for {label}: got {len(result)}/{length} bytes; "
+                    f"partial={_format_serial_bytes(partial, limit=128)}"
                 )
 
             remaining = length - len(result)
@@ -675,6 +677,7 @@ class BootloaderProtocol:
                 time.sleep(0.01)
                 continue
 
+            self._monitor_binary("RX", chunk, f"{label} partial")
             result.extend(chunk)
 
         return bytes(result[:length])
