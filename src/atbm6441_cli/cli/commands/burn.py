@@ -68,7 +68,6 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--firmware",
         "-f",
-        required=True,
         type=str,
         help="Path to firmware image (CODE1: fw_update1.bin)",
     )
@@ -150,16 +149,22 @@ def burn_handler(args: argparse.Namespace) -> int:
     )
 
     # Resolve file paths
-    firmware_path = Path(args.firmware)
+    firmware_path = Path(args.firmware) if args.firmware else None
     bootloader_path = Path(args.bootloader) if args.bootloader else None
     flashcode_path = Path(args.flashcode) if args.flashcode else None
     keyfile_path = Path(args.keyfile) if args.keyfile else None
 
+    if not any((firmware_path, bootloader_path, flashcode_path, keyfile_path)):
+        print(
+            "Error: specify at least one of --firmware, --flashcode, --bootloader, or --keyfile",
+            file=sys.stderr,
+        )
+        return 1
+
     # Validate files exist
-    for p in [firmware_path]:
-        if not p.exists():
-            print(f"Error: firmware file not found: {p}", file=sys.stderr)
-            return 1
+    if firmware_path and not firmware_path.exists():
+        print(f"Error: firmware file not found: {firmware_path}", file=sys.stderr)
+        return 1
 
     if bootloader_path and not bootloader_path.exists():
         print(
@@ -199,7 +204,7 @@ def burn_handler(args: argparse.Namespace) -> int:
     # Build firmware spec
     spec = FirmwareSpec(
         bootloader=str(bootloader_path) if bootloader_path else None,
-        code1=str(firmware_path),
+        code1=str(firmware_path) if firmware_path else None,
         code2=str(flashcode_path) if flashcode_path else None,
         keyfile=str(keyfile_path) if keyfile_path else None,
         mac=args.mac,
@@ -220,7 +225,8 @@ def burn_handler(args: argparse.Namespace) -> int:
     total_size = 0
     if bootloader_path:
         total_size += bootloader_path.stat().st_size
-    total_size += firmware_path.stat().st_size
+    if firmware_path:
+        total_size += firmware_path.stat().st_size
     if flashcode_path:
         total_size += flashcode_path.stat().st_size
 

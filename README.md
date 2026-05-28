@@ -69,7 +69,7 @@ atbm6441-cli burn \
 | `--auto-detect` | Scan for FT232/USB-serial device | — |
 | `--baud`, `-b` | Burn baud rate | 1000000 |
 | `--at-baud` | AT command baud rate | 115200 |
-| `--firmware`, `-f` | CODE1 firmware (fw_update1.bin) | required |
+| `--firmware`, `-f` | CODE1 firmware (fw_update1.bin) | optional |
 | `--bootloader`, `-F` | Bootloader image | optional |
 | `--flashcode` | CODE2 flash image (fw_update2.bin) | optional |
 | `--keyfile` | KEY file (CSV/TXT) | optional |
@@ -91,7 +91,6 @@ python tools/patch_no_reboot.py firmware_dump_le.bin
 
 atbm6441-cli burn --manual-mode --no-reboot --serial-monitor \
   --port COM6 \
-  --firmware firmware_analysis/code1_original.bin \
   --flashcode firmware_analysis/code2_no_reboot.bin
 ```
 
