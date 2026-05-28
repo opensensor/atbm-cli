@@ -713,16 +713,22 @@ class BootloaderProtocol:
             self._monitor_serial("TX", cmd)
             self._serial.write(cmd)
 
-            raw = self._read_until_any(
-                markers=(
-                    MARKER_FWUPDATA_MODE_V2,
-                    b"Unknown command",
-                    b"+ERR",
-                    MARKER_ERROR,
-                ),
-                timeout=self._boot_timeout,
-                expected_length=4096,
-            )
+            try:
+                raw = self._read_until_any(
+                    markers=(
+                        MARKER_FWUPDATA_MODE_V2,
+                        b"Unknown command",
+                        b"+ERR",
+                        MARKER_ERROR,
+                    ),
+                    timeout=self._boot_timeout,
+                    expected_length=4096,
+                )
+            except TimeoutError:
+                if attempt < len(command_attempts):
+                    logger.debug("Typed fwupdata command timed out; retrying bare command")
+                    continue
+                raise
             if MARKER_FWUPDATA_MODE_V2 in raw:
                 break
 

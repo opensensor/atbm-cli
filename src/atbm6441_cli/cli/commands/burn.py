@@ -67,9 +67,15 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--boot-timeout",
-        default=5,
+        default=30,
         type=int,
-        help="Seconds to wait for bootloader prompt",
+        help="Seconds to wait for bootloader prompt/mode banner",
+    )
+    p.add_argument(
+        "--send-timeout",
+        default=120,
+        type=int,
+        help="Seconds to wait for each firmware transfer response",
     )
     p.add_argument(
         "--firmware",
@@ -258,7 +264,7 @@ def burn_handler(args: argparse.Namespace) -> int:
     bp = BootloaderProtocol(
         serial=sm,
         chunk_size=1024,
-        send_timeout=30.0,
+        send_timeout=float(args.send_timeout),
         boot_timeout=args.boot_timeout,
         serial_monitor=args.serial_monitor,
     )

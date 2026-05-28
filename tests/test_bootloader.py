@@ -290,6 +290,25 @@ class TestBootloaderProtocol:
         assert writes[1] == b"fwupdata\r\n"
         assert len(writes[2]) == FWUPDATA_PACKET_SIZE
 
+    def test_send_fwupdata_file_falls_back_to_bare_command_on_timeout(
+        self, mock_serial: MagicMock
+    ) -> None:
+        ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
+        mock_serial.read.side_effect = [
+            b"",
+            MARKER_FWUPDATA_MODE_V2 + b"\r\n",
+            ack,
+        ]
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=0.01, send_timeout=1.0)
+
+        resp = bp.send_fwupdata_file(b"\xAA\xBB", fw_type=2, label="CODE2")
+
+        assert resp.is_download_success is True
+        writes = [call[0][0] for call in mock_serial.write.call_args_list]
+        assert writes[0] == b"fwupdata 2\r\n"
+        assert writes[1] == b"fwupdata\r\n"
+        assert len(writes[2]) == FWUPDATA_PACKET_SIZE
+
     def test_burn_firmware_fwupdata_rejects_keyfile(self, mock_serial: MagicMock) -> None:
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         spec = FirmwareSpec(code2="/tmp/code2.bin", keyfile="/tmp/key.txt")

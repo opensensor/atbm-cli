@@ -69,6 +69,8 @@ atbm6441-cli burn \
 | `--auto-detect` | Scan for FT232/USB-serial device | — |
 | `--baud`, `-b` | Burn baud rate | 1000000 |
 | `--at-baud` | AT command baud rate | 115200 |
+| `--boot-timeout` | Seconds to wait for bootloader prompt/mode banner | 30 |
+| `--send-timeout` | Seconds to wait for each firmware transfer response | 120 |
 | `--firmware`, `-f` | CODE1 firmware (fw_update1.bin) | optional |
 | `--bootloader`, `-F` | Bootloader image | optional |
 | `--flashcode` | CODE2 flash image (fw_update2.bin) | optional |
