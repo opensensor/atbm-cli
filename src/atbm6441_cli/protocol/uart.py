@@ -50,14 +50,33 @@ class SerialManager:
             target_port = self._auto_detect()
 
         logger.info("Opening serial port %s at %d baud", target_port, self._baudrate)
-        self._serial = serial.Serial(
-            port=target_port,
-            baudrate=self._baudrate,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=self._timeout,
-        )
+        # Create deferred so we can clear DTR/RTS before the port is actually
+        # opened. Many FTDI cables strap DTR or RTS to the chip's reset or
+        # boot-mode pin; pyserial's default-asserted lines silently knock the
+        # chip out of whatever state the user just put it in.
+        self._serial = serial.Serial()
+        self._serial.port = target_port
+        self._serial.baudrate = self._baudrate
+        self._serial.bytesize = serial.EIGHTBITS
+        self._serial.parity = serial.PARITY_NONE
+        self._serial.stopbits = serial.STOPBITS_ONE
+        self._serial.timeout = self._timeout
+        self._serial.xonxoff = False
+        self._serial.rtscts = False
+        self._serial.dsrdtr = False
+        try:
+            self._serial.dtr = False
+            self._serial.rts = False
+        except (AttributeError, OSError):
+            # Some platforms only let us set these after open(); fall back to
+            # clearing them post-open below.
+            pass
+        self._serial.open()
+        try:
+            self._serial.dtr = False
+            self._serial.rts = False
+        except (AttributeError, OSError):
+            pass
         self._port = target_port
         logger.info("Serial port %s opened successfully", target_port)
 
