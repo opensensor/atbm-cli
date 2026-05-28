@@ -134,6 +134,7 @@ class FwupdataOptions:
     packet_delay_ms: int = 0
     tx_delay_ms: int = 0
     skip_zero_chunks: bool = False
+    target_baud: int = 1000000
 
 
 @dataclass
@@ -782,9 +783,14 @@ class BootloaderProtocol:
                 text="No fwupdata images specified",
             )
 
+        if options.target_baud <= 0:
+            raise ValueError(
+                f"fwupdata target baud must be positive: {options.target_baud}"
+            )
+
         self._reset_input_buffer()
         raw = b""
-        cmd = BOOT_FWUPDATA + b"\n"
+        cmd = BOOT_FWUPDATA + b" " + str(options.target_baud).encode() + b"\n"
         self._monitor_serial("TX", cmd)
         self._serial.write(cmd)
         try:
@@ -823,6 +829,14 @@ class BootloaderProtocol:
                 "fwupdata banner missing from bootloader response: "
                 f"{_format_serial_bytes(raw, limit=128)}"
             )
+
+        set_baud = getattr(self._serial, "set_baudrate", None)
+        if callable(set_baud):
+            logger.info(
+                "Switching serial baud to %d for fwupdata binary mode",
+                options.target_baud,
+            )
+            set_baud(options.target_baud)
 
         total_size = sum(len(data) for data, _fw_type, _label in images)
         total_progress = 0

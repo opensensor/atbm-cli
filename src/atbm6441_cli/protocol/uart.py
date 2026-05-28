@@ -116,6 +116,13 @@ class SerialManager:
             raise RuntimeError("Serial port is not open. Call open() first.")
         self._serial.reset_input_buffer()
 
+    def set_baudrate(self, baudrate: int) -> None:
+        """Change the port's baud rate without closing it."""
+        if not self._serial or not self._serial.is_open:
+            raise RuntimeError("Serial port is not open. Call open() first.")
+        self._baudrate = baudrate
+        self._serial.baudrate = baudrate
+
     def read_until(
         self,
         sentinel: bytes = b"\n",

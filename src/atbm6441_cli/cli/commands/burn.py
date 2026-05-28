@@ -96,6 +96,17 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Skip all-zero fwupdata chunks when writing sparse patch images",
     )
     p.add_argument(
+        "--fwupdata-target-baud",
+        "--fwupdata_target_baud",
+        default=1000000,
+        type=int,
+        help=(
+            "Baud rate argument passed to `fwupdata <baud>` (default 1000000). "
+            "The CLI switches the port to this rate after the chip's "
+            "`change Msg mode v2` banner."
+        ),
+    )
+    p.add_argument(
         "--firmware",
         "-f",
         type=str,
@@ -352,6 +363,7 @@ def burn_handler(args: argparse.Namespace) -> int:
                 packet_delay_ms=args.packet_delay_ms,
                 tx_delay_ms=args.tx_delay_ms,
                 skip_zero_chunks=args.skip_zero_chunks,
+                target_baud=args.fwupdata_target_baud,
             )
             result = bp.burn_firmware_fwupdata(
                 spec,
