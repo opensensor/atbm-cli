@@ -112,6 +112,62 @@ def _parse_response(raw: bytes) -> BootloaderResponse:
     return resp
 
 
+def _parse_hex_memory_response(raw: bytes, expected_length: int) -> bytes:
+    """Parse hex block memory response from AT+WIFI_ETF_RMEM.
+
+    Response format (6446/6447):
+        AT+WIFI_ETF_RMEM 0x00002000 4096
+        {00000000: 00000000} 00000000 00000000 00000000{00000010: 00000000} ...
+
+    Args:
+        raw: Raw response bytes.
+        expected_length: Number of bytes expected.
+
+    Returns:
+        Parsed bytes.
+    """
+    text = raw.decode("utf-8", errors="replace")
+
+    result = bytearray(expected_length)
+    offset = 0
+
+    # Parse hex blocks: {addr: data} data data ...
+    import re
+    # Match {address: hexdata} patterns
+    block_pattern = re.compile(r'\{([0-9a-fA-F]+):\s*([0-9a-fA-F]+)\}')
+
+    for match in block_pattern.finditer(text):
+        addr_str = match.group(1)
+        data_str = match.group(2)
+
+        try:
+            addr = int(addr_str, 16)
+            # Each hex char pair is one byte
+            for i in range(0, len(data_str), 2):
+                if offset + i // 2 < expected_length:
+                    byte_val = int(data_str[i:i+2], 16)
+                    result[addr + i // 2] = byte_val
+        except (ValueError, IndexError):
+            continue
+
+    # Also try parsing continuous hex data after blocks
+    # Remove block patterns and look for remaining hex
+    cleaned = block_pattern.sub('', text)
+    hex_chars = re.sub(r'\s+', '', cleaned)
+
+    # Parse any remaining hex bytes
+    for i in range(0, len(hex_chars) - 1, 2):
+        if offset < expected_length:
+            try:
+                byte_val = int(hex_chars[i:i+2], 16)
+                result[offset] = byte_val
+                offset += 1
+            except ValueError:
+                break
+
+    return bytes(result)
+
+
 @dataclass
 class FirmwareSpec:
     """Specification for firmware images to burn.
@@ -454,15 +510,20 @@ class BootloaderProtocol:
 
         # 6446/6447 response format:
         #   AT+WIFI_ETF_RMEM 0x00002000 4096
-        #   {00000000: 00000000} 00000000 ...
-        # Read until we get a prompt ">" or timeout
+        #   {00000000: 00000000} 00000000 00000000 00000000{00000010: ...}
+        #   >
+        # Read until newline (response ends with prompt on next line)
         raw = self._serial.read_until(
-            sentinel=b">",
-            timeout=5.0,
+            sentinel=b"\n",
+            timeout=10.0,
             expected_length=length * 4 + 64,  # hex format: ~4 bytes per input byte
         )
 
-        return _parse_response(raw)
+        # Parse hex blocks: {addr: data} data data ...
+        parsed = _parse_hex_memory_response(raw, length)
+        resp = _parse_response(raw)
+        resp.raw = parsed  # Replace raw with parsed bytes
+        return resp
 
     def get_modem_info(self) -> BootloaderResponse:
         """Get modem info via AT+GMR.
