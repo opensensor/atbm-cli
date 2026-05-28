@@ -171,7 +171,7 @@ class TestBootloaderProtocol:
             bp.enter_bootloader()
 
     def test_send_firmware_success(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = (
+        mock_serial.read.return_value = (
             b"<<<   download SUCCESS   >>>\r\n"
         )
         bp = BootloaderProtocol(serial=mock_serial, chunk_size=256)
@@ -186,7 +186,7 @@ class TestBootloaderProtocol:
         assert first_call[0][0] == AT_SEND
 
     def test_send_firmware_fail(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = (
+        mock_serial.read.return_value = (
             b"download fail,please check boot download mode\r\n"
         )
         bp = BootloaderProtocol(serial=mock_serial, chunk_size=256)
@@ -196,7 +196,7 @@ class TestBootloaderProtocol:
         assert resp.is_download_fail is True
 
     def test_send_firmware_progress_callback(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = b"OK\r\n"
+        mock_serial.read.return_value = b"OK\r\n"
         bp = BootloaderProtocol(serial=mock_serial, chunk_size=256)
         data = b"\x00" * 512
 
@@ -309,7 +309,12 @@ class TestBootloaderProtocol:
 
     def test_burn_firmware_all(self, mock_serial: MagicMock) -> None:
         """Test full burn sequence with all firmware components."""
-        mock_serial.read.return_value = b"[ bootloader mode ]\r\n"
+        mock_serial.read.side_effect = [
+            b"[ bootloader mode ]\r\n",
+            b"<<<   download SUCCESS   >>>\r\n",
+            b"<<<   download SUCCESS   >>>\r\n",
+            b"<<<   download SUCCESS   >>>\r\n",
+        ]
         mock_serial.read_until.return_value = (
             b"<<<   download SUCCESS   >>>\r\n"
         )
@@ -327,6 +332,7 @@ class TestBootloaderProtocol:
 
     def test_burn_firmware_partial(self, mock_serial: MagicMock) -> None:
         """Test burn with only CODE1."""
+        mock_serial.read.return_value = b"<<<   download SUCCESS   >>>\r\n"
         mock_serial.read_until.return_value = (
             b"<<<   download SUCCESS   >>>\r\n"
         )
@@ -339,9 +345,7 @@ class TestBootloaderProtocol:
 
     def test_burn_firmware_fail(self, mock_serial: MagicMock) -> None:
         """Test burn that fails on CODE1."""
-        mock_serial.read_until.return_value = (
-            b"download fail\r\n"
-        )
+        mock_serial.read.return_value = b"download fail\r\n"
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         spec = FirmwareSpec(code1="/tmp/code1.bin")
 
@@ -375,7 +379,7 @@ class TestBootloaderProtocol:
 
     def test_send_firmware_chunk_boundary(self, mock_serial: MagicMock) -> None:
         """Test firmware sent in correct chunk sizes."""
-        mock_serial.read_until.return_value = b"OK\r\n"
+        mock_serial.read.return_value = b"OK\r\n"
         bp = BootloaderProtocol(serial=mock_serial, chunk_size=128)
         data = b"\x00" * 256  # Exactly 2 chunks
 
@@ -387,7 +391,7 @@ class TestBootloaderProtocol:
 
     def test_send_firmware_small_data(self, mock_serial: MagicMock) -> None:
         """Test firmware smaller than chunk size."""
-        mock_serial.read_until.return_value = b"OK\r\n"
+        mock_serial.read.return_value = b"OK\r\n"
         bp = BootloaderProtocol(serial=mock_serial, chunk_size=1024)
         data = b"\x00" * 16  # 16 bytes
 

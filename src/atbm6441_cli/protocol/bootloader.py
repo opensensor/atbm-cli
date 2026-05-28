@@ -423,7 +423,10 @@ class BootloaderProtocol:
             addr,
         )
 
+        self._reset_input_buffer()
+
         # Send AT+SEND command first
+        self._monitor_serial("TX", AT_SEND)
         self._serial.write(AT_SEND)
         logger.debug("Sent AT+SEND command")
 
@@ -446,12 +449,7 @@ class BootloaderProtocol:
                 len(chunk),
             )
 
-        # Wait for response
-        raw = self._serial.read_until(
-            sentinel=b"\n",
-            timeout=self._send_timeout,
-            expected_length=4096,
-        )
+        raw = self._read_firmware_download_response(payload_length=len(data))
 
         resp = _parse_response(raw)
         logger.info(
@@ -460,6 +458,47 @@ class BootloaderProtocol:
         )
 
         return resp
+
+    def _read_firmware_download_response(self, payload_length: int) -> bytes:
+        """Read the bootloader's response after a raw firmware transfer."""
+        terminal_markers = (
+            MARKER_DOWNLOAD_SUCCESS,
+            MARKER_DOWNLOAD_FAIL,
+            b"OK\r\n",
+            b"OK\n",
+            b"+OK",
+            MARKER_ERROR,
+        )
+        max_length = max(payload_length + 64 * 1024, 64 * 1024)
+        start_time = time.time()
+        last_idle_report = start_time
+        result = bytearray()
+
+        while True:
+            now = time.time()
+            if now - start_time > self._send_timeout:
+                raise TimeoutError(
+                    f"Timeout waiting for firmware download response after {len(result)} bytes"
+                )
+            if len(result) > max_length:
+                raise TimeoutError(
+                    f"Read more than {max_length} bytes without finding a firmware download response"
+                )
+
+            remaining = max(0.05, self._send_timeout - (time.time() - start_time))
+            chunk = self._serial.read(length=256, timeout=min(0.1, remaining))
+            if not chunk:
+                now = time.time()
+                if now - last_idle_report >= 5.0:
+                    self._monitor_idle(now - start_time, terminal_markers, len(result))
+                    last_idle_report = now
+                time.sleep(0.01)
+                continue
+
+            self._monitor_serial("RX", chunk)
+            result.extend(chunk)
+            if any(marker in result for marker in terminal_markers):
+                return bytes(result)
 
     def reboot(self) -> BootloaderResponse:
         """Reboot the chip after firmware download.

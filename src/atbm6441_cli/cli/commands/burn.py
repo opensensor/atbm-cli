@@ -230,19 +230,23 @@ def burn_handler(args: argparse.Namespace) -> int:
     if flashcode_path:
         total_size += flashcode_path.stat().st_size
 
+    progress_bar = None
+
     def _progress(sent: int, total: int) -> None:
+        nonlocal progress_bar
         if args.json:
             return
-        bar = tqdm(
-            total=total,
-            initial=sent,
-            desc="Firmware download",
-            unit="B",
-            unit_scale=True,
-            bar_format="{l_bar}{bar:30}{r_bar}",
-        )
-        bar.n = sent
-        bar.update(0)
+        if progress_bar is None or progress_bar.total != total or sent < progress_bar.n:
+            if progress_bar is not None:
+                progress_bar.close()
+            progress_bar = tqdm(
+                total=total,
+                desc="Firmware download",
+                unit="B",
+                unit_scale=True,
+                bar_format="{l_bar}{bar:30}{r_bar}",
+            )
+        progress_bar.update(sent - progress_bar.n)
 
     bp.progress_callback = _progress
 
@@ -298,4 +302,6 @@ def burn_handler(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     finally:
+        if progress_bar is not None:
+            progress_bar.close()
         bp.close()
