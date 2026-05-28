@@ -132,6 +132,7 @@ class FwupdataOptions:
     last_flags: int = FWUPDATA_FLAGS_LAST
     checksum: str = "sum-bytes"
     packet_delay_ms: int = 0
+    tx_delay_ms: int = 0
     skip_zero_chunks: bool = False
 
 
@@ -819,6 +820,8 @@ class BootloaderProtocol:
                         f"flags=0x{flags:02X} csum=0x{checksum_value:04X}"
                     ),
                 )
+                if options.tx_delay_ms:
+                    time.sleep(options.tx_delay_ms / 1000.0)
                 self._serial.write(packet)
 
                 ack_raw = self._read_exact(

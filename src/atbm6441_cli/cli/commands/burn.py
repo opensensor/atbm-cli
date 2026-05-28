@@ -81,7 +81,13 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
         "--packet-delay-ms",
         default=0,
         type=int,
-        help="Milliseconds to pause between fwupdata packets",
+        help="Milliseconds to pause after fwupdata packets (inter-packet gap)",
+    )
+    p.add_argument(
+        "--tx-delay-ms",
+        default=0,
+        type=int,
+        help="Milliseconds to delay before each fwupdata packet send (simulates ETF_TxDelayBetweenTwoFrames)",
     )
     p.add_argument(
         "--skip-zero-chunks",
@@ -339,6 +345,7 @@ def burn_handler(args: argparse.Namespace) -> int:
                 last_flags=args.fwupdata_last_flags,
                 checksum=args.fwupdata_checksum,
                 packet_delay_ms=args.packet_delay_ms,
+                tx_delay_ms=args.tx_delay_ms,
                 skip_zero_chunks=args.skip_zero_chunks,
             )
             result = bp.burn_firmware_fwupdata(
