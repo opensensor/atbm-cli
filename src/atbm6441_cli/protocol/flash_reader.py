@@ -33,7 +33,7 @@ class FlashReader:
             serial: Open SerialManager instance.
             flash_size: Known flash size in bytes. If None, auto-discover via JEDEC.
             chunk_size: Size of each read chunk in bytes. Defaults to 4096.
-            bootloader: BootloaderProtocol instance for AT+WIFI_ETF_RMEM reads.
+            bootloader: BootloaderProtocol instance for bootloader flash reads.
                 If provided, uses this for all flash reads.
         """
         self._serial = serial
@@ -56,8 +56,8 @@ class FlashReader:
         return info.size_bytes
 
     def _read_chunk_via_bootloader(self, addr: int, size: int) -> bytes:
-        """Read a chunk from flash using AT+WIFI_ETF_RMEM."""
-        return self._bootloader.read_memory(addr, size).raw
+        """Read a chunk from flash using bootloader-mode flash offsets."""
+        return self._bootloader.read_flash(addr, size).raw
 
     def read_all(self, progress_callback: Callable[[int, int], None] | None = None) -> bytes:
         """Read the entire flash content.
@@ -139,7 +139,7 @@ class FlashReader:
                 else:
                     raise RuntimeError(
                         "No bootloader instance provided. "
-                        "Pass bootloader= to FlashReader for AT+WIFI_ETF_RMEM reads."
+                        "Pass bootloader= to FlashReader for bootloader flash reads."
                     )
                 if len(data) < chunk_size:
                     # Pad with zeros if we got less than expected

@@ -18,6 +18,7 @@ from atbm6441_cli.protocol.bootloader import (
     AT_WIFI_GET_FWINFO,
     BootloaderProtocol,
     BootloaderResponse,
+    FLASH_MEMORY_BASE,
     FirmwareSpec,
     BOOTLOADER_ADDR,
     BOOTLOADER_MAX_SIZE,
@@ -30,6 +31,7 @@ from atbm6441_cli.protocol.bootloader import (
     MARKER_DOWNLOAD_SUCCESS,
     MARKER_OK,
     MARKER_ROM_CODE_MODE,
+    _parse_hex_memory_response,
     _parse_response,
 )
 
@@ -85,6 +87,15 @@ class TestParseResponse:
         resp = _parse_response(raw)
         assert resp.raw == b""
         assert resp.text == ""
+
+    def test_parse_bootloader_memory_dump(self) -> None:
+        raw = (
+            b"Memory at 00400000:\r\n"
+            b"  00400000: DEADBEEF 01020304\r\n"
+            b"+OK"
+        )
+        parsed = _parse_hex_memory_response(raw, 8, base_address=FLASH_MEMORY_BASE)
+        assert parsed == bytes.fromhex("DEADBEEF01020304")
 
 
 # ── FirmwareSpec tests ───────────────────────────────────────────────────
@@ -234,6 +245,20 @@ class TestBootloaderProtocol:
         assert cmd.startswith(b"AT+WIFI_ETF_RMEM")
         assert b"00000000" in cmd
         # Verify parsed bytes (DEADBEEF in big-endian)
+        assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
+
+    def test_read_flash_uses_bootloader_flash_mapping(self, mock_serial: MagicMock) -> None:
+        mock_serial.read.return_value = (
+            b"Memory at 00400000:\r\n"
+            b"  00400000: DEADBEEF\r\n"
+            b"+OK"
+        )
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
+
+        resp = bp.read_flash(0x000000, 4)
+
+        cmd = mock_serial.write.call_args_list[0][0][0]
+        assert cmd == b"rmem 00400000 1\r\n"
         assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
 
     def test_get_modem_info(self, mock_serial: MagicMock) -> None:

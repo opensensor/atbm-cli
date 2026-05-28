@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import struct
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -49,6 +50,7 @@ CODE1_ADDR = 0x010000
 CODE2_ADDR = 0x040000
 
 BOOTLOADER_MAX_SIZE = 48 * 1024  # 48 KB
+FLASH_MEMORY_BASE = 0x00400000  # SDK flash.h: FLASH_BASE for ATBM6441/Hera
 
 # ── AT command constants ─────────────────────────────────────────────────
 
@@ -112,7 +114,11 @@ def _parse_response(raw: bytes) -> BootloaderResponse:
     return resp
 
 
-def _parse_hex_memory_response(raw: bytes, expected_length: int) -> bytes:
+def _parse_hex_memory_response(
+    raw: bytes,
+    expected_length: int,
+    base_address: int | None = None,
+) -> bytes:
     """Parse hex block memory response from AT+WIFI_ETF_RMEM.
 
     Response format (6446/6447):
@@ -134,36 +140,43 @@ def _parse_hex_memory_response(raw: bytes, expected_length: int) -> bytes:
     text = raw.decode("utf-8", errors="replace")
 
     result = bytearray(expected_length)
+    parsed_any = False
 
-    # Pattern: {addr: 4hexbytes} 16hexbytes (4 words)
-    # Example: {00000000: fa37001e} fa37001e 45290089 45290089 45290089{00000010: 45290089}
-    block_pattern = re.compile(
-        r'\{([0-9a-fA-F]+):\s*([0-9a-fA-F]{8})\}\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})'
-    )
+    def write_word(addr: int, word: str) -> None:
+        nonlocal parsed_any
+        if base_address is not None and addr >= base_address:
+            addr -= base_address
+        for byte_idx in range(4):
+            pos = addr + byte_idx
+            if 0 <= pos < expected_length:
+                hex_pos = byte_idx * 2
+                result[pos] = int(word[hex_pos:hex_pos + 2], 16)
+                parsed_any = True
 
-    for match in block_pattern.finditer(text):
-        addr_str = match.group(1)
-        block_data = match.group(2)  # 4 bytes in braces
-        word1 = match.group(3)  # 4 bytes
-        word2 = match.group(4)  # 4 bytes
-        word3 = match.group(5)  # 4 bytes
-        word4 = match.group(6)  # 4 bytes
+    # ETF dump format: {00000000: fa37001e} 45290089 ...
+    block_pattern = re.compile(r"\{([0-9a-fA-F]{1,8}):\s*([0-9a-fA-F]{8})\}")
+    matches = list(block_pattern.finditer(text))
+    for idx, match in enumerate(matches):
+        addr = int(match.group(1), 16)
+        words = [match.group(2)]
+        block_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        trailing_text = text[match.end():block_end]
+        words.extend(
+            re.findall(r"(?<![0-9a-fA-F])([0-9a-fA-F]{8})(?![0-9a-fA-F])", trailing_text)
+        )
+        for word_idx, word in enumerate(words):
+            write_word(addr + word_idx * 4, word)
 
-        try:
-            addr = int(addr_str, 16)
+    # CLI/bootloader dump format: 00400000: DEADBEEF [more words...]
+    line_pattern = re.compile(r"^\s*(?:0x)?([0-9a-fA-F]{1,8})\s*:\s*(.*)$", re.MULTILINE)
+    for match in line_pattern.finditer(text):
+        addr = int(match.group(1), 16)
+        words = re.findall(r"(?<![0-9a-fA-F])(?:0x)?([0-9a-fA-F]{8})(?![0-9a-fA-F])", match.group(2))
+        for word_idx, word in enumerate(words):
+            write_word(addr + word_idx * 4, word)
 
-            # Parse all 20 bytes (5 words × 4 bytes)
-            all_words = [block_data, word1, word2, word3, word4]
-            for word_idx, word in enumerate(all_words):
-                byte_offset = addr + word_idx * 4
-                for byte_idx in range(4):
-                    pos = byte_offset + byte_idx
-                    if 0 <= pos < expected_length:
-                        hex_pos = byte_idx * 2
-                        byte_val = int(word[hex_pos:hex_pos+2], 16)
-                        result[pos] = byte_val
-        except (ValueError, IndexError):
-            continue
+    if not parsed_any and expected_length:
+        raise ValueError("No hex memory data found in response")
 
     return bytes(result)
 
@@ -523,10 +536,80 @@ class BootloaderProtocol:
         logger.debug("Received %d bytes from AT+WIFI_ETF_RMEM", len(raw))
 
         # Parse hex blocks: {addr: data} data data ...
-        parsed = _parse_hex_memory_response(raw, length)
+        parsed = _parse_hex_memory_response(raw, length, base_address=address)
         resp = _parse_response(raw)
         resp.raw = parsed  # Replace raw with parsed bytes
         return resp
+
+    def _read_until_any(
+        self,
+        markers: tuple[bytes, ...],
+        timeout: float,
+        expected_length: int,
+    ) -> bytes:
+        """Read until any marker appears, or until timeout/size limit."""
+        start_time = time.time()
+        result = bytearray()
+
+        while True:
+            if time.time() - start_time > timeout:
+                raise TimeoutError(f"Timeout waiting for any of {markers!r}")
+            if len(result) > expected_length:
+                raise TimeoutError(
+                    f"Read more than {expected_length} bytes without finding any of {markers!r}"
+                )
+
+            chunk = self._serial.read(length=256)
+            if not chunk:
+                time.sleep(0.01)
+                continue
+
+            result.extend(chunk)
+            if any(marker in result for marker in markers):
+                return bytes(result)
+
+    def read_flash(self, offset: int, length: int = 4) -> BootloaderResponse:
+        """Read bytes from SPI flash through bootloader memory mapping.
+
+        The SDK maps flash offset 0 to memory address 0x00400000 in bootloader
+        context. This keeps the public API in flash offsets while avoiding RAM
+        address 0 reads.
+        """
+        if offset < 0:
+            raise ValueError("Flash offset must be non-negative")
+        if length <= 0:
+            return BootloaderResponse(raw=b"", is_ok=True, text="")
+
+        address = FLASH_MEMORY_BASE + offset
+        dword_count = (length + 3) // 4
+        commands = (
+            f"rmem {address:08x} {dword_count}\r\n".encode(),
+            f"AT+rmem {address:08x} {dword_count}\r\n".encode(),
+            f"AT+WIFI_ETF_RMEM {address:08x} {length}\r\n".encode(),
+        )
+        last_raw = b""
+
+        for cmd in commands:
+            logger.info("Reading %d flash bytes at offset 0x%06X via %r", length, offset, cmd.strip())
+            self._serial.write(cmd)
+            raw = self._read_until_any(
+                markers=(b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),
+                timeout=60.0,
+                expected_length=max(length * 8 + 4096, 8192),
+            )
+            last_raw = raw
+
+            if b"+ERR" in raw or b"ERROR" in raw or b"Unknown command" in raw:
+                logger.debug("Flash read command rejected: %r", raw[-256:])
+                continue
+
+            parsed = _parse_hex_memory_response(raw, length, base_address=address)
+            resp = _parse_response(raw)
+            resp.raw = parsed
+            return resp
+
+        resp = _parse_response(last_raw)
+        raise RuntimeError(f"Flash read command rejected by device: {resp.text}")
 
     def get_modem_info(self) -> BootloaderResponse:
         """Get modem info via AT+GMR.

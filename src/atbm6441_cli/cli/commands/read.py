@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 
@@ -33,6 +34,12 @@ def read_handler(args: argparse.Namespace) -> int:
     from atbm6441_cli.protocol.flash_reader import FlashReader
     from atbm6441_cli.protocol.uart import SerialManager
 
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
     # Validate: need --read-all OR (--addr + --len)
     if args.read_all:
         if args.addr or args.length:
@@ -48,11 +55,9 @@ def read_handler(args: argparse.Namespace) -> int:
     addr = int(args.addr, 16) if args.addr else 0
     length = int(args.length, 16) if args.length else 0
 
-    serial = SerialManager(baudrate=args.baud)
+    serial = SerialManager(port=args.port if not args.auto_detect else None, baudrate=args.baud)
     try:
-        serial.open(args.port or (None if args.auto_detect else None))
-        if args.auto_detect:
-            serial.open()  # triggers auto-detect
+        serial.open()
 
         # Enter bootloader mode and create protocol instance
         bootloader = BootloaderProtocol(serial, boot_timeout=args.boot_timeout)

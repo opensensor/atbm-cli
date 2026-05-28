@@ -26,11 +26,11 @@ class TestFlashReader:
         bootloader = Mock()
         bootloader._serial = mock_serial
         # Return 4KB of sequential data for any address
-        def mock_read_memory(address: int, length: int) -> Mock:
+        def mock_read_flash(address: int, length: int) -> Mock:
             response = Mock()
             response.raw = bytes([address & 0xFF] * length)
             return response
-        bootloader.read_memory = mock_read_memory
+        bootloader.read_flash = mock_read_flash
         return bootloader
 
     @pytest.fixture
@@ -107,12 +107,12 @@ class TestFlashReader:
         """_read_chunk retries MAX_RETRIES times on failure."""
         call_count = 0
 
-        def failing_read_memory(address: int, length: int) -> Mock:
+        def failing_read_flash(address: int, length: int) -> Mock:
             nonlocal call_count
             call_count += 1
             raise RuntimeError("Simulated failure")
 
-        mock_bootloader.read_memory = failing_read_memory
+        mock_bootloader.read_flash = failing_read_flash
         reader = FlashReader(mock_serial, flash_size=0x1000, bootloader=mock_bootloader)
 
         with pytest.raises(RuntimeError, match="Failed to read chunk"):
@@ -122,12 +122,12 @@ class TestFlashReader:
 
     def test_chunk_read_short_data_padded(self, mock_serial: Mock, mock_bootloader: Mock) -> None:
         """Short chunk data is padded with zeros."""
-        def short_read_memory(address: int, length: int) -> Mock:
+        def short_read_flash(address: int, length: int) -> Mock:
             response = Mock()
             response.raw = b"\xAB"  # Only 1 byte
             return response
 
-        mock_bootloader.read_memory = short_read_memory
+        mock_bootloader.read_flash = short_read_flash
         reader = FlashReader(mock_serial, flash_size=0x1000, bootloader=mock_bootloader)
 
         # CHUNK_SIZE is 4096, callback returns 1 byte
@@ -144,7 +144,7 @@ class TestFlashReader:
             response.raw = b"\xFF"  # 1 byte
             return response
 
-        mock_bootloader.read_memory = callback
+        mock_bootloader.read_flash = callback
         reader = FlashReader(mock_serial, flash_size=0x1003, bootloader=mock_bootloader)
 
         data = reader.read_all()
@@ -154,13 +154,13 @@ class TestFlashReader:
         """Custom chunk_size is respected."""
         calls: list[int] = []
 
-        def track_read_memory(address: int, length: int) -> Mock:
+        def track_read_flash(address: int, length: int) -> Mock:
             calls.append(address)
             response = Mock()
             response.raw = b"\x00" * 2048
             return response
 
-        mock_bootloader.read_memory = track_read_memory
+        mock_bootloader.read_flash = track_read_flash
         reader = FlashReader(
             mock_serial,
             flash_size=0x4000,
