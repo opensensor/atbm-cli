@@ -510,14 +510,17 @@ class BootloaderProtocol:
 
         # 6446/6447 response format:
         #   AT+WIFI_ETF_RMEM 00002000 4096
+        #   System_timer_cancel:... (boot messages)
         #   {00000000: 00000000} 00000000 00000000 00000000{00000010: ...}
         #   +OK
         # Read until +OK marker (response is a long hex dump)
         raw = self._serial.read_until(
             sentinel=b"+OK",
-            timeout=30.0,
-            expected_length=length * 4 + 128,  # hex format: ~4 bytes per input byte
+            timeout=60.0,
+            expected_length=length * 4 + 256,  # hex format: ~4 bytes per input byte
         )
+
+        logger.debug("Received %d bytes from AT+WIFI_ETF_RMEM", len(raw))
 
         # Parse hex blocks: {addr: data} data data ...
         parsed = _parse_hex_memory_response(raw, length)
