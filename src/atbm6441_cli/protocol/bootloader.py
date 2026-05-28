@@ -504,15 +504,15 @@ class BootloaderProtocol:
         Raises:
             RuntimeError: If serial port is not open.
         """
-        cmd = f"AT+WIFI_ETF_RMEM {address:#010x} {length}\r\n".encode()
+        cmd = f"AT+WIFI_ETF_RMEM {address:08x} {length}\r\n".encode()
         logger.info("Reading %d bytes from addr 0x%08X", length, address)
         self._serial.write(cmd)
 
         # 6446/6447 response format:
-        #   AT+WIFI_ETF_RMEM 0x00002000 4096
+        #   AT+WIFI_ETF_RMEM 00002000 4096
         #   {00000000: 00000000} 00000000 00000000 00000000{00000010: ...}
         #   >
-        # Read until newline (response ends with prompt on next line)
+        # Read until newline or timeout (response is a long hex dump)
         raw = self._serial.read_until(
             sentinel=b"\n",
             timeout=10.0,
