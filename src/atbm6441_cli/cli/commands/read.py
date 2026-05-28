@@ -63,15 +63,13 @@ def read_handler(args: argparse.Namespace) -> int:
         bootloader = BootloaderProtocol(serial, boot_timeout=args.boot_timeout)
         if args.manual_mode:
             print(
-                "Waiting for bootloader prompt. Hold BOOT_SEL asserted, reset the chip, then release reset.",
+                "Manual mode: assuming the device is already at the bootloader prompt.",
                 file=sys.stderr,
             )
-            enter_resp = bootloader.sync_bootloader_prompt()
         else:
             enter_resp = bootloader.enter_bootloader()
-
-        if not enter_resp.is_bootloader_mode and not enter_resp.is_rom_code_mode:
-            raise RuntimeError(f"Device did not enter bootloader mode: {enter_resp.text}")
+            if not enter_resp.is_bootloader_mode and not enter_resp.is_rom_code_mode:
+                raise RuntimeError(f"Device did not enter bootloader mode: {enter_resp.text}")
 
         flash_size = int(args.flash_size, 16) if args.flash_size else None
         if flash_size is None and args.read_all:
