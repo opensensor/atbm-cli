@@ -102,7 +102,7 @@ def info_handler(args: argparse.Namespace) -> int:
                 results[name] = resp.raw.decode("utf-8", errors="replace").strip()
                 print(f"  {resp.text}")
         else:
-            name, (_, func) = cmd_map[args.command]
+            name, func = cmd_map[args.command]
             print(f"Sending {name}...")
             resp = func()
             results[name] = resp.raw.decode("utf-8", errors="replace").strip()
