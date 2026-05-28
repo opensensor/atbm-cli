@@ -69,6 +69,7 @@ AT_WIFI_STATUS = b"AT+WIFI_STATUS\r\n"
 
 MARKER_BOOTLOADER_MODE = b"[ bootloader mode ]"
 MARKER_ROM_CODE_MODE = b"[ rom code mode ]"
+MARKER_BOOT_PROMPT = b">"
 MARKER_DOWNLOAD_SUCCESS = b"download SUCCESS"
 MARKER_DOWNLOAD_FAIL = b"download fail"
 MARKER_OK = b"OK"
@@ -98,7 +99,7 @@ def _parse_response(raw: bytes) -> BootloaderResponse:
     except Exception:
         resp.text = repr(raw)
 
-    if MARKER_BOOTLOADER_MODE in raw:
+    if MARKER_BOOTLOADER_MODE in raw or raw.rstrip().endswith(MARKER_BOOT_PROMPT):
         resp.is_bootloader_mode = True
     if MARKER_ROM_CODE_MODE in raw:
         resp.is_rom_code_mode = True
@@ -263,12 +264,12 @@ class BootloaderProtocol:
         self._progress_callback = value
 
     def enter_bootloader(self) -> BootloaderResponse:
-        """Enter bootloader mode by sending AT+START.
+        """Enter bootloader mode.
 
-        For chips that don't support AT+START (e.g. ATBM6446), this method
-        sends AT+START anyway and returns the response. If the chip is
-        already in a usable AT command mode, subsequent AT+WIFI_ETF_RMEM
-        commands will work regardless.
+        Some firmware builds accept ``AT+START`` from AT mode. The ROM/boot
+        path used by the burn tool instead requires BOOT_SEL + reset and then
+        echoes a ``>`` prompt. This method tries the AT command first, then
+        falls back to synchronizing with that boot prompt.
 
         Returns:
             BootloaderResponse with mode detection.
@@ -280,24 +281,66 @@ class BootloaderProtocol:
         logger.info("Sending AT+START to enter bootloader mode...")
         self._serial.write(AT_START)
 
-        raw = self._serial.read_until(
-            sentinel=b"\n",
-            timeout=self._boot_timeout,
-            expected_length=4096,
-        )
+        try:
+            raw = self._read_until_any(
+                markers=(MARKER_BOOTLOADER_MODE, MARKER_ROM_CODE_MODE, MARKER_BOOT_PROMPT, b"\n"),
+                timeout=self._boot_timeout,
+                expected_length=4096,
+            )
+        except TimeoutError:
+            logger.warning("No AT+START response; trying bootloader prompt sync")
+            return self.sync_bootloader_prompt()
 
         resp = _parse_response(raw)
+        if not resp.is_bootloader_mode and not resp.is_rom_code_mode:
+            logger.warning(
+                "Unexpected AT+START response, trying prompt sync: %s", resp.text
+            )
+            return self.sync_bootloader_prompt()
+
         logger.info(
             "Bootloader mode response: %s",
             "bootloader" if resp.is_bootloader_mode else "rom code",
         )
 
-        if not resp.is_bootloader_mode and not resp.is_rom_code_mode:
-            logger.warning(
-                "Unexpected bootloader response: %s", resp.text
-            )
-
         return resp
+
+    def sync_bootloader_prompt(self, timeout: float | None = None) -> BootloaderResponse:
+        """Synchronize with a manually entered bootloader prompt.
+
+        The Windows GUI/SDK flow sends Enter while the user or fixture resets
+        the chip with BOOT_SEL asserted. A successful bootloader answers with
+        the ``>`` prompt.
+        """
+        effective_timeout = timeout if timeout is not None else self._boot_timeout
+        deadline = time.time() + effective_timeout
+        raw = bytearray()
+
+        logger.info("Waiting for bootloader prompt '>'...")
+        while time.time() < deadline:
+            self._serial.write(b"\r\n")
+            try:
+                chunk = self._read_until_any(
+                    markers=(MARKER_BOOTLOADER_MODE, MARKER_ROM_CODE_MODE, MARKER_BOOT_PROMPT),
+                    timeout=min(0.5, max(0.05, deadline - time.time())),
+                    expected_length=4096,
+                )
+            except TimeoutError:
+                continue
+
+            raw.extend(chunk)
+            resp = _parse_response(bytes(raw))
+            if resp.is_bootloader_mode or resp.is_rom_code_mode:
+                logger.info(
+                    "Synchronized with %s",
+                    "bootloader prompt" if resp.is_bootloader_mode else "rom code mode",
+                )
+                return resp
+
+        raise TimeoutError(
+            "Timed out waiting for bootloader prompt '>'. "
+            "Put the chip in bootloader mode with BOOT_SEL asserted and reset, then retry."
+        )
 
     def send_firmware(
         self, data: bytes, addr: int = CODE1_ADDR
@@ -559,7 +602,8 @@ class BootloaderProtocol:
                     f"Read more than {expected_length} bytes without finding any of {markers!r}"
                 )
 
-            chunk = self._serial.read(length=256)
+            remaining = max(0.05, timeout - (time.time() - start_time))
+            chunk = self._serial.read(length=256, timeout=min(0.1, remaining))
             if not chunk:
                 time.sleep(0.01)
                 continue
@@ -567,6 +611,11 @@ class BootloaderProtocol:
             result.extend(chunk)
             if any(marker in result for marker in markers):
                 return bytes(result)
+
+    def _reset_input_buffer(self) -> None:
+        reset = getattr(self._serial, "reset_input_buffer", None)
+        if callable(reset):
+            reset()
 
     def read_flash(self, offset: int, length: int = 4) -> BootloaderResponse:
         """Read bytes from SPI flash through bootloader memory mapping.
@@ -591,9 +640,10 @@ class BootloaderProtocol:
 
         for cmd in commands:
             logger.info("Reading %d flash bytes at offset 0x%06X via %r", length, offset, cmd.strip())
+            self._reset_input_buffer()
             self._serial.write(cmd)
             raw = self._read_until_any(
-                markers=(b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),
+                markers=(MARKER_BOOT_PROMPT, b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),
                 timeout=60.0,
                 expected_length=max(length * 8 + 4096, 8192),
             )
@@ -603,7 +653,11 @@ class BootloaderProtocol:
                 logger.debug("Flash read command rejected: %r", raw[-256:])
                 continue
 
-            parsed = _parse_hex_memory_response(raw, length, base_address=address)
+            try:
+                parsed = _parse_hex_memory_response(raw, length, base_address=address)
+            except ValueError:
+                logger.debug("Flash read command produced no parseable data: %r", raw[-256:])
+                continue
             resp = _parse_response(raw)
             resp.raw = parsed
             return resp

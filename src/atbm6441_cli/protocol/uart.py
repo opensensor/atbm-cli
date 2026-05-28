@@ -100,8 +100,21 @@ class SerialManager:
         if not self._serial or not self._serial.is_open:
             raise RuntimeError("Serial port is not open. Call open() first.")
 
-        effective_timeout = timeout if timeout is not None else self._timeout
-        return self._serial.read(size=length)
+        if timeout is None:
+            return self._serial.read(size=length)
+
+        original_timeout = self._serial.timeout
+        self._serial.timeout = timeout
+        try:
+            return self._serial.read(size=length)
+        finally:
+            self._serial.timeout = original_timeout
+
+    def reset_input_buffer(self) -> None:
+        """Discard bytes already buffered by the serial driver."""
+        if not self._serial or not self._serial.is_open:
+            raise RuntimeError("Serial port is not open. Call open() first.")
+        self._serial.reset_input_buffer()
 
     def read_until(
         self,

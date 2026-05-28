@@ -132,25 +132,33 @@ class TestBootloaderProtocol:
         return mock
 
     def test_enter_bootloader_success(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = b"[ bootloader mode ]\r\n"
+        mock_serial.read.return_value = b"[ bootloader mode ]\r\n"
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         resp = bp.enter_bootloader()
         assert resp.is_bootloader_mode is True
         mock_serial.write.assert_called_once_with(AT_START)
 
     def test_enter_bootloader_rom_code(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = b"[ rom code mode ]\r\n"
+        mock_serial.read.return_value = b"[ rom code mode ]\r\n"
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         resp = bp.enter_bootloader()
         assert resp.is_rom_code_mode is True
         assert resp.is_bootloader_mode is False
 
-    def test_enter_bootloader_unexpected(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = b"Unknown\r\n"
+    def test_enter_bootloader_unexpected_falls_back_to_prompt(self, mock_serial: MagicMock) -> None:
+        mock_serial.read.side_effect = [b"Unknown\r\n", b">"]
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         resp = bp.enter_bootloader()
-        assert resp.is_bootloader_mode is False
+        assert resp.is_bootloader_mode is True
         assert resp.is_rom_code_mode is False
+        assert mock_serial.write.call_args_list[0][0][0] == AT_START
+        assert mock_serial.write.call_args_list[1][0][0] == b"\r\n"
+
+    def test_enter_bootloader_timeout_instructs_manual_mode(self, mock_serial: MagicMock) -> None:
+        mock_serial.read.return_value = b""
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=0.01)
+        with pytest.raises(TimeoutError, match="BOOT_SEL"):
+            bp.enter_bootloader()
 
     def test_send_firmware_success(self, mock_serial: MagicMock) -> None:
         mock_serial.read_until.return_value = (
@@ -291,6 +299,7 @@ class TestBootloaderProtocol:
 
     def test_burn_firmware_all(self, mock_serial: MagicMock) -> None:
         """Test full burn sequence with all firmware components."""
+        mock_serial.read.return_value = b"[ bootloader mode ]\r\n"
         mock_serial.read_until.return_value = (
             b"<<<   download SUCCESS   >>>\r\n"
         )
