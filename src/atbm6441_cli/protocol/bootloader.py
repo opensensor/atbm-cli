@@ -705,12 +705,36 @@ class BootloaderProtocol:
         if options.packet_delay_ms < 0:
             raise ValueError("fwupdata packet delay must be non-negative")
 
-        logger.info(
-            "Sending %s (%d bytes) via fwupdata type %d",
-            label,
-            len(data),
-            fw_type,
+        return self.send_fwupdata_stream(
+            [(data, fw_type, label)],
+            options=options,
         )
+
+    def send_fwupdata_stream(
+        self,
+        images: list[tuple[bytes, int, str]],
+        *,
+        options: FwupdataOptions | None = None,
+    ) -> BootloaderResponse:
+        """Send one raw bootloader ``fwupdata`` transaction.
+
+        When CODE1 and CODE2 are both present, the bootloader expects a single
+        binary-mode transaction. The last flag belongs only on the final packet
+        of the final image.
+        """
+        if options is None:
+            options = FwupdataOptions()
+        if options.checksum not in FWUPDATA_CHECKSUM_MODES:
+            raise ValueError(f"Unsupported fwupdata checksum mode: {options.checksum}")
+        if options.packet_delay_ms < 0:
+            raise ValueError("fwupdata packet delay must be non-negative")
+        if not images:
+            return BootloaderResponse(
+                raw=b"",
+                is_ok=True,
+                is_download_success=True,
+                text="No fwupdata images specified",
+            )
 
         self._reset_input_buffer()
         raw = b""
@@ -742,73 +766,95 @@ class BootloaderProtocol:
                 resp = _parse_response(raw)
                 raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
 
-        total_sent = 0
+        total_size = sum(len(data) for data, _fw_type, _label in images)
+        total_progress = 0
         last_ack: FwupdataAck | None = None
         chunk_size = FWUPDATA_CHUNK_SIZE
-        total_chunks = (len(data) + chunk_size - 1) // chunk_size
 
-        for index, offset in enumerate(range(0, len(data), chunk_size), start=1):
-            chunk = data[offset : offset + chunk_size]
-            is_last = offset + len(chunk) >= len(data)
-            if options.skip_zero_chunks and not is_last and not any(chunk):
-                logger.debug("Skipping zero fwupdata chunk at offset=0x%06X", offset)
-                if self._progress_callback:
-                    self._progress_callback(offset + len(chunk), len(data))
-                continue
-            flags = options.last_flags if is_last else options.normal_flags
-            packet = _build_fwupdata_packet(
-                chunk,
-                offset=offset,
-                fw_type=fw_type,
-                flags=flags,
-                msg_id=options.msg_id,
-                checksum=options.checksum,
-            )
-            checksum_value = struct.unpack_from("<H", packet, 10)[0]
-            logger.debug(
-                "Sending %s fwupdata chunk %d/%d offset=0x%06X len=%d "
-                "flags=0x%02X checksum=0x%04X",
+        for image_index, (data, fw_type, label) in enumerate(images):
+            logger.info(
+                "Sending %s (%d bytes) via fwupdata type %d",
                 label,
-                index,
-                total_chunks,
-                offset,
-                len(chunk),
-                flags,
-                checksum_value,
+                len(data),
+                fw_type,
             )
-            self._monitor_binary(
-                "TX",
-                packet,
-                (
-                    f"{label} packet offset=0x{offset:06X} len={len(chunk)} "
-                    f"flags=0x{flags:02X} csum=0x{checksum_value:04X}"
-                ),
-            )
-            self._serial.write(packet)
+            total_chunks = (len(data) + chunk_size - 1) // chunk_size
 
-            ack_raw = self._read_exact(16, timeout=self._send_timeout, label="fwupdata ack")
-            self._monitor_binary("RX", ack_raw, f"{label} ack offset=0x{offset:06X}")
-            ack = _parse_fwupdata_ack(ack_raw)
-            last_ack = ack
-            if ack.result != 0:
-                result_name = FWUPDATA_RESULT_NAMES.get(ack.result, f"result {ack.result}")
-                raise RuntimeError(
-                    f"{label} fwupdata failed at offset 0x{offset:06X}: "
-                    f"state={ack.state} result={ack.result} ({result_name})"
+            for index, offset in enumerate(range(0, len(data), chunk_size), start=1):
+                chunk = data[offset : offset + chunk_size]
+                is_image_last = offset + len(chunk) >= len(data)
+                is_final_packet = image_index == len(images) - 1 and is_image_last
+                if options.skip_zero_chunks and not is_final_packet and not any(chunk):
+                    logger.debug("Skipping zero fwupdata chunk at offset=0x%06X", offset)
+                    total_progress += len(chunk)
+                    if self._progress_callback:
+                        self._progress_callback(total_progress, total_size)
+                    continue
+                flags = options.last_flags if is_final_packet else options.normal_flags
+                packet = _build_fwupdata_packet(
+                    chunk,
+                    offset=offset,
+                    fw_type=fw_type,
+                    flags=flags,
+                    msg_id=options.msg_id,
+                    checksum=options.checksum,
                 )
+                checksum_value = struct.unpack_from("<H", packet, 10)[0]
+                logger.debug(
+                    "Sending %s fwupdata chunk %d/%d offset=0x%06X len=%d "
+                    "flags=0x%02X checksum=0x%04X",
+                    label,
+                    index,
+                    total_chunks,
+                    offset,
+                    len(chunk),
+                    flags,
+                    checksum_value,
+                )
+                self._monitor_binary(
+                    "TX",
+                    packet,
+                    (
+                        f"{label} packet offset=0x{offset:06X} len={len(chunk)} "
+                        f"flags=0x{flags:02X} csum=0x{checksum_value:04X}"
+                    ),
+                )
+                self._serial.write(packet)
 
-            total_sent += len(chunk)
-            if self._progress_callback:
-                self._progress_callback(max(total_sent, offset + len(chunk)), len(data))
-            if options.packet_delay_ms and not is_last:
-                time.sleep(options.packet_delay_ms / 1000.0)
+                ack_raw = self._read_exact(
+                    16,
+                    timeout=self._send_timeout,
+                    label="fwupdata ack",
+                )
+                self._monitor_binary(
+                    "RX",
+                    ack_raw,
+                    f"{label} ack offset=0x{offset:06X}",
+                )
+                ack = _parse_fwupdata_ack(ack_raw)
+                last_ack = ack
+                if ack.result != 0:
+                    result_name = FWUPDATA_RESULT_NAMES.get(
+                        ack.result,
+                        f"result {ack.result}",
+                    )
+                    raise RuntimeError(
+                        f"{label} fwupdata failed at offset 0x{offset:06X}: "
+                        f"state={ack.state} result={ack.result} ({result_name})"
+                    )
+
+                total_progress += len(chunk)
+                if self._progress_callback:
+                    self._progress_callback(total_progress, total_size)
+                if options.packet_delay_ms and not is_final_packet:
+                    time.sleep(options.packet_delay_ms / 1000.0)
 
         raw_ack = last_ack.raw if last_ack is not None else raw
         return BootloaderResponse(
             raw=raw_ack,
             is_ok=True,
             is_download_success=True,
-            text=f"{label} fwupdata complete",
+            text="fwupdata complete",
         )
 
     def reboot(self) -> BootloaderResponse:
@@ -1416,15 +1462,32 @@ class BootloaderProtocol:
 
         results: list[BootloaderResponse] = []
 
-        if spec.code1:
-            logger.info("--- Step 1: CODE1 (ICCM) fwupdata ---")
-            resp = self.send_code1_fwupdata(spec.code1, options=options)
+        if spec.code1 and spec.code2:
+            logger.info("--- Step 1: CODE1 + CODE2 fwupdata transaction ---")
+            logger.info("Loading CODE1 from %s", spec.code1)
+            with open(spec.code1, "rb") as f:
+                code1_data = f.read()
+            logger.info("Loading CODE2 from %s", spec.code2)
+            with open(spec.code2, "rb") as f:
+                code2_data = f.read()
+            resp = self.send_fwupdata_stream(
+                [
+                    (code1_data, options.code1_type, "CODE1"),
+                    (code2_data, options.code2_type, "CODE2"),
+                ],
+                options=options,
+            )
             results.append(resp)
+        else:
+            if spec.code1:
+                logger.info("--- Step 1: CODE1 (ICCM) fwupdata ---")
+                resp = self.send_code1_fwupdata(spec.code1, options=options)
+                results.append(resp)
 
-        if spec.code2:
-            logger.info("--- Step 2: CODE2 (Flash) fwupdata ---")
-            resp = self.send_code2_fwupdata(spec.code2, options=options)
-            results.append(resp)
+            if spec.code2:
+                logger.info("--- Step 2: CODE2 (Flash) fwupdata ---")
+                resp = self.send_code2_fwupdata(spec.code2, options=options)
+                results.append(resp)
 
         if not results:
             return BootloaderResponse(

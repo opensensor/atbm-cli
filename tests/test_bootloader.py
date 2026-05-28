@@ -271,6 +271,38 @@ class TestBootloaderProtocol:
         assert writes[0] == b"fwupdata\n"
         assert all(write != AT_SEND for write in writes)
 
+    def test_burn_firmware_fwupdata_code1_code2_single_transaction(
+        self, mock_serial: MagicMock
+    ) -> None:
+        ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
+        mock_serial.read.side_effect = [
+            MARKER_FWUPDATA_MODE_V2 + b"\r\n",
+            ack,
+            ack,
+        ]
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0, send_timeout=1.0)
+        spec = FirmwareSpec(code1="/tmp/code1.bin", code2="/tmp/code2.bin")
+
+        file_data = {
+            "/tmp/code1.bin": b"\x11\x22",
+            "/tmp/code2.bin": b"\x33\x44",
+        }
+
+        def _open(path: str, mode: str = "rb") -> io.BytesIO:
+            assert mode == "rb"
+            return io.BytesIO(file_data[path])
+
+        with patch("builtins.open", _open):
+            resp = bp.burn_firmware_fwupdata(spec, reboot=False)
+
+        assert resp.is_download_success is True
+        writes = [call[0][0] for call in mock_serial.write.call_args_list]
+        assert writes.count(b"fwupdata\n") == 1
+        packets = [write for write in writes if len(write) == FWUPDATA_PACKET_SIZE]
+        assert len(packets) == 2
+        assert struct.unpack_from("<HHIBB", packets[0], 0) == (2, 0, 0, 0, 1)
+        assert struct.unpack_from("<HHIBB", packets[1], 0) == (2, 0, 0, 1, 2)
+
     def test_send_fwupdata_file_rejects_unknown_command(
         self, mock_serial: MagicMock
     ) -> None:
