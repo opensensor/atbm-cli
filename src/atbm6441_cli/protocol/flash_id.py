@@ -16,6 +16,7 @@ CAPACITY_MAP: dict[int, int] = {
     0x17: 0x200000,   # 2 MB
     0x18: 0x400000,   # 4 MB
     0x19: 0x800000,   # 8 MB
+    0x5F: 0x400000,   # 4 MB (ATBM6446 variant)
 }
 
 

@@ -19,6 +19,7 @@ def read_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--len", dest="length", type=str, help="Number of bytes to read (hex, e.g. 0x100000)")
     p.add_argument("--read-all", action="store_true", help="Read entire flash (auto-discover size)")
     p.add_argument("--output", "-o", required=True, type=str, help="Output file path")
+    p.add_argument("--flash-size", type=str, help="Override flash size (hex, e.g. 0x400000 for 4MB)")
     p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     p.add_argument("--json", action="store_true", help="JSON output mode")
@@ -51,7 +52,8 @@ def read_handler(args: argparse.Namespace) -> int:
         if args.auto_detect:
             serial.open()  # triggers auto-detect
 
-        reader = FlashReader(serial)
+        flash_size = int(args.flash_size, 16) if args.flash_size else None
+        reader = FlashReader(serial, flash_size=flash_size)
 
         def progress_callback(bytes_read: int, total: int) -> None:
             pct = (bytes_read / total * 100) if total else 0
