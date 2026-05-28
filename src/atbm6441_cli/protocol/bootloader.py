@@ -116,8 +116,12 @@ def _parse_hex_memory_response(raw: bytes, expected_length: int) -> bytes:
     """Parse hex block memory response from AT+WIFI_ETF_RMEM.
 
     Response format (6446/6447):
-        AT+WIFI_ETF_RMEM 0x00002000 4096
-        {00000000: 00000000} 00000000 00000000 00000000{00000010: 00000000} ...
+        AT+WIFI_ETF_RMEM 00002000 4096
+        {00000000: fa37001e} fa37001e 45290089 45290089 45290089{00000010: 45290089} ...
+        +OK
+
+    Each block: {addr: 4bytes} 16bytes (4 words × 4 bytes)
+    Total per block: 20 bytes
 
     Args:
         raw: Raw response bytes.
@@ -126,44 +130,40 @@ def _parse_hex_memory_response(raw: bytes, expected_length: int) -> bytes:
     Returns:
         Parsed bytes.
     """
+    import re
     text = raw.decode("utf-8", errors="replace")
 
     result = bytearray(expected_length)
-    offset = 0
 
-    # Parse hex blocks: {addr: data} data data ...
-    import re
-    # Match {address: hexdata} patterns
-    block_pattern = re.compile(r'\{([0-9a-fA-F]+):\s*([0-9a-fA-F]+)\}')
+    # Pattern: {addr: 4hexbytes} 16hexbytes (4 words)
+    # Example: {00000000: fa37001e} fa37001e 45290089 45290089 45290089{00000010: 45290089}
+    block_pattern = re.compile(
+        r'\{([0-9a-fA-F]+):\s*([0-9a-fA-F]{8})\}\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})'
+    )
 
     for match in block_pattern.finditer(text):
         addr_str = match.group(1)
-        data_str = match.group(2)
+        block_data = match.group(2)  # 4 bytes in braces
+        word1 = match.group(3)  # 4 bytes
+        word2 = match.group(4)  # 4 bytes
+        word3 = match.group(5)  # 4 bytes
+        word4 = match.group(6)  # 4 bytes
 
         try:
             addr = int(addr_str, 16)
-            # Each hex char pair is one byte
-            for i in range(0, len(data_str), 2):
-                if offset + i // 2 < expected_length:
-                    byte_val = int(data_str[i:i+2], 16)
-                    result[addr + i // 2] = byte_val
+
+            # Parse all 20 bytes (5 words × 4 bytes)
+            all_words = [block_data, word1, word2, word3, word4]
+            for word_idx, word in enumerate(all_words):
+                byte_offset = addr + word_idx * 4
+                for byte_idx in range(4):
+                    pos = byte_offset + byte_idx
+                    if 0 <= pos < expected_length:
+                        hex_pos = byte_idx * 2
+                        byte_val = int(word[hex_pos:hex_pos+2], 16)
+                        result[pos] = byte_val
         except (ValueError, IndexError):
             continue
-
-    # Also try parsing continuous hex data after blocks
-    # Remove block patterns and look for remaining hex
-    cleaned = block_pattern.sub('', text)
-    hex_chars = re.sub(r'\s+', '', cleaned)
-
-    # Parse any remaining hex bytes
-    for i in range(0, len(hex_chars) - 1, 2):
-        if offset < expected_length:
-            try:
-                byte_val = int(hex_chars[i:i+2], 16)
-                result[offset] = byte_val
-                offset += 1
-            except ValueError:
-                break
 
     return bytes(result)
 
@@ -511,12 +511,12 @@ class BootloaderProtocol:
         # 6446/6447 response format:
         #   AT+WIFI_ETF_RMEM 00002000 4096
         #   {00000000: 00000000} 00000000 00000000 00000000{00000010: ...}
-        #   >
-        # Read until newline or timeout (response is a long hex dump)
+        #   +OK
+        # Read until +OK marker (response is a long hex dump)
         raw = self._serial.read_until(
-            sentinel=b"\n",
-            timeout=10.0,
-            expected_length=length * 4 + 64,  # hex format: ~4 bytes per input byte
+            sentinel=b"+OK",
+            timeout=30.0,
+            expected_length=length * 4 + 128,  # hex format: ~4 bytes per input byte
         )
 
         # Parse hex blocks: {addr: data} data data ...

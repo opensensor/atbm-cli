@@ -219,16 +219,22 @@ class TestBootloaderProtocol:
             bp.write_memory(0x100000, 0x100000000)  # 33-bit value
 
     def test_read_memory(self, mock_serial: MagicMock) -> None:
-        mock_serial.read_until.return_value = b"0x16a00020:0xDEADBEEF\r\n"
+        # New 6446 hex block format
+        mock_serial.read_until.return_value = (
+            b"AT+WIFI_ETF_RMEM 00000000 4\r\n"
+            b"{00000000: DEADBEEF} DEADBEEF 00000000 00000000 00000000\r\n"
+            b"+OK"
+        )
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
-        resp = bp.read_memory(0x16a00020, 4)
-        assert resp.text == "0x16a00020:0xDEADBEEF"
-        # Verify command format
+        resp = bp.read_memory(0x00000000, 4)
+        # Verify command format (no 0x prefix for 6446)
         write_calls = mock_serial.write.call_args_list
         cmd_call = write_calls[0]
         cmd = cmd_call[0][0]
         assert cmd.startswith(b"AT+WIFI_ETF_RMEM")
-        assert b"0x16a00020" in cmd
+        assert b"00000000" in cmd
+        # Verify parsed bytes (DEADBEEF in big-endian)
+        assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
 
     def test_get_modem_info(self, mock_serial: MagicMock) -> None:
         mock_serial.read_until.return_value = b"AT+GMR response\r\n"
