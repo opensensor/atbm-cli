@@ -784,9 +784,13 @@ class BootloaderProtocol:
 
         self._reset_input_buffer()
         raw = b""
-        cmd = BOOT_FWUPDATA + b"\r\n"
+        cmd = BOOT_FWUPDATA + b"\n"
         self._monitor_serial("TX", cmd)
         self._serial.write(cmd)
+        try:
+            self._serial.flush()
+        except AttributeError:
+            pass
 
         try:
             raw = self._read_until_any(
