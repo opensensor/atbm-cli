@@ -506,6 +506,40 @@ class BootloaderProtocol:
 
         return _parse_response(raw)
 
+    def get_fw_info(self) -> BootloaderResponse:
+        """Get firmware info via AT+WIFI_GET_FWINFO.
+
+        Returns:
+            BootloaderResponse with firmware information.
+        """
+        logger.info("Sending AT+WIFI_GET_FWINFO...")
+        self._serial.write(AT_WIFI_GET_FWINFO)
+
+        raw = self._serial.read_until(
+            sentinel=b"\n",
+            timeout=2.0,
+            expected_length=256,
+        )
+
+        return _parse_response(raw)
+
+    def get_wifi_status(self) -> BootloaderResponse:
+        """Get WiFi status via AT+WIFI_STATUS.
+
+        Returns:
+            BootloaderResponse with WiFi status.
+        """
+        logger.info("Sending AT+WIFI_STATUS...")
+        self._serial.write(AT_WIFI_STATUS)
+
+        raw = self._serial.read_until(
+            sentinel=b"\n",
+            timeout=2.0,
+            expected_length=256,
+        )
+
+        return _parse_response(raw)
+
     def burn_firmware(self, spec: FirmwareSpec) -> BootloaderResponse:
         """Burn all specified firmware images in sequence.
 
