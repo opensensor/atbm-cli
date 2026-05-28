@@ -55,9 +55,24 @@ def read_handler(args: argparse.Namespace) -> int:
 
         # Enter bootloader mode and create protocol instance
         bootloader = BootloaderProtocol(serial, boot_timeout=args.boot_timeout)
-        bootloader.enter_bootloader()
+        try:
+            bootloader.enter_bootloader()
+        except TimeoutError:
+            print("Warning: timeout entering bootloader mode, continuing anyway", file=sys.stderr)
 
         flash_size = int(args.flash_size, 16) if args.flash_size else None
+        if flash_size is None and args.read_all:
+            # Try to discover flash size via JEDEC ID, fall back to 4MB
+            try:
+                from atbm6441_cli.protocol.flash_id import FlashIdReader
+                id_reader = FlashIdReader(serial)
+                info = id_reader.read_id()
+                flash_size = info.size_bytes
+                print(f"Discovered flash size: {info.size_human}", file=sys.stderr)
+            except (TimeoutError, ValueError) as e:
+                flash_size = 0x400000  # Default 4MB for ATBM6446
+                print(f"Warning: JEDEC ID failed ({e}), using default 4MB", file=sys.stderr)
+
         reader = FlashReader(serial, flash_size=flash_size, bootloader=bootloader)
 
         def progress_callback(bytes_read: int, total: int) -> None:

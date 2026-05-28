@@ -196,6 +196,11 @@ class BootloaderProtocol:
     def enter_bootloader(self) -> BootloaderResponse:
         """Enter bootloader mode by sending AT+START.
 
+        For chips that don't support AT+START (e.g. ATBM6446), this method
+        sends AT+START anyway and returns the response. If the chip is
+        already in a usable AT command mode, subsequent AT+WIFI_ETF_RMEM
+        commands will work regardless.
+
         Returns:
             BootloaderResponse with mode detection.
 
