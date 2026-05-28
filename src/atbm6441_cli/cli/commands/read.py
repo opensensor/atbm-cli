@@ -19,6 +19,7 @@ def read_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--len", dest="length", type=str, help="Number of bytes to read (hex, e.g. 0x100000)")
     p.add_argument("--read-all", action="store_true", help="Read entire flash (auto-discover size)")
     p.add_argument("--output", "-o", required=True, type=str, help="Output file path")
+    p.add_argument("--device", choices=["6441", "6446", "6447"], help="Chip model (skip JEDEC for 6446/6447)")
     p.add_argument("--flash-size", type=str, help="Override flash size (hex, e.g. 0x400000 for 4MB)")
     p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
     p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
@@ -62,16 +63,21 @@ def read_handler(args: argparse.Namespace) -> int:
 
         flash_size = int(args.flash_size, 16) if args.flash_size else None
         if flash_size is None and args.read_all:
-            # Try to discover flash size via JEDEC ID, fall back to 4MB
-            try:
-                from atbm6441_cli.protocol.flash_id import FlashIdReader
-                id_reader = FlashIdReader(serial)
-                info = id_reader.read_id()
-                flash_size = info.size_bytes
-                print(f"Discovered flash size: {info.size_human}", file=sys.stderr)
-            except (TimeoutError, ValueError) as e:
-                flash_size = 0x400000  # Default 4MB for ATBM6446
-                print(f"Warning: JEDEC ID failed ({e}), using default 4MB", file=sys.stderr)
+            # Skip JEDEC ID for 6446/6447 (they don't support it)
+            if args.device in ("6446", "6447"):
+                flash_size = 0x400000  # Default 4MB
+                print(f"Using default 4MB flash size (JEDEC not supported on {args.device})", file=sys.stderr)
+            else:
+                # Try to discover flash size via JEDEC ID, fall back to 4MB
+                try:
+                    from atbm6441_cli.protocol.flash_id import FlashIdReader
+                    id_reader = FlashIdReader(serial)
+                    info = id_reader.read_id()
+                    flash_size = info.size_bytes
+                    print(f"Discovered flash size: {info.size_human}", file=sys.stderr)
+                except (TimeoutError, ValueError) as e:
+                    flash_size = 0x400000  # Default 4MB
+                    print(f"Warning: JEDEC ID failed ({e}), using default 4MB", file=sys.stderr)
 
         reader = FlashReader(serial, flash_size=flash_size, bootloader=bootloader)
 

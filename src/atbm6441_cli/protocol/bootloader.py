@@ -452,10 +452,14 @@ class BootloaderProtocol:
         logger.info("Reading %d bytes from addr 0x%08X", length, address)
         self._serial.write(cmd)
 
+        # 6446/6447 response format:
+        #   AT+WIFI_ETF_RMEM 0x00002000 4096
+        #   {00000000: 00000000} 00000000 ...
+        # Read until we get a prompt ">" or timeout
         raw = self._serial.read_until(
-            sentinel=b"\n",
-            timeout=2.0,
-            expected_length=256,
+            sentinel=b">",
+            timeout=5.0,
+            expected_length=length * 4 + 64,  # hex format: ~4 bytes per input byte
         )
 
         return _parse_response(raw)
