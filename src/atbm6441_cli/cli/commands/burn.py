@@ -84,6 +84,11 @@ def burn_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Milliseconds to pause between fwupdata packets",
     )
     p.add_argument(
+        "--skip-zero-chunks",
+        action="store_true",
+        help="Skip all-zero fwupdata chunks when writing sparse patch images",
+    )
+    p.add_argument(
         "--firmware",
         "-f",
         type=str,
@@ -334,6 +339,7 @@ def burn_handler(args: argparse.Namespace) -> int:
                 last_flags=args.fwupdata_last_flags,
                 checksum=args.fwupdata_checksum,
                 packet_delay_ms=args.packet_delay_ms,
+                skip_zero_chunks=args.skip_zero_chunks,
             )
             result = bp.burn_firmware_fwupdata(
                 spec,

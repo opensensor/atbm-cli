@@ -72,6 +72,7 @@ atbm6441-cli burn \
 | `--boot-timeout` | Seconds to wait for bootloader prompt/mode banner | 30 |
 | `--send-timeout` | Seconds to wait for each firmware transfer response | 120 |
 | `--packet-delay-ms` | Pause between raw `fwupdata` packets | 0 |
+| `--skip-zero-chunks` | Skip all-zero raw `fwupdata` chunks for sparse patch burns | — |
 | `--firmware`, `-f` | CODE1 firmware (fw_update1.bin) | optional |
 | `--bootloader`, `-F` | Bootloader image | optional |
 | `--flashcode` | CODE2 flash image (fw_update2.bin) | optional |

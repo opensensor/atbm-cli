@@ -132,6 +132,7 @@ class FwupdataOptions:
     last_flags: int = FWUPDATA_FLAGS_LAST
     checksum: str = "sum-bytes"
     packet_delay_ms: int = 0
+    skip_zero_chunks: bool = False
 
 
 @dataclass
@@ -749,6 +750,11 @@ class BootloaderProtocol:
         for index, offset in enumerate(range(0, len(data), chunk_size), start=1):
             chunk = data[offset : offset + chunk_size]
             is_last = offset + len(chunk) >= len(data)
+            if options.skip_zero_chunks and not is_last and not any(chunk):
+                logger.debug("Skipping zero fwupdata chunk at offset=0x%06X", offset)
+                if self._progress_callback:
+                    self._progress_callback(offset + len(chunk), len(data))
+                continue
             flags = options.last_flags if is_last else options.normal_flags
             packet = _build_fwupdata_packet(
                 chunk,
@@ -793,7 +799,7 @@ class BootloaderProtocol:
 
             total_sent += len(chunk)
             if self._progress_callback:
-                self._progress_callback(total_sent, len(data))
+                self._progress_callback(max(total_sent, offset + len(chunk)), len(data))
             if options.packet_delay_ms and not is_last:
                 time.sleep(options.packet_delay_ms / 1000.0)
 

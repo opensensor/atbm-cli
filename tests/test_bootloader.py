@@ -319,6 +319,29 @@ class TestBootloaderProtocol:
         assert resp.is_download_success is True
         sleep_mock.assert_called_once_with(0.025)
 
+    def test_send_fwupdata_file_skips_zero_chunks(self, mock_serial: MagicMock) -> None:
+        ack = struct.pack("<HHIII", 16, 0, 0, 0, 0)
+        mock_serial.read.side_effect = [MARKER_FWUPDATA_MODE_V2 + b"\r\n", ack, ack]
+        bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0, send_timeout=1.0)
+        data = b"\xAA" + (b"\x00" * 8191) + b"\xBB"
+
+        resp = bp.send_fwupdata_file(
+            data,
+            fw_type=2,
+            label="CODE2",
+            options=FwupdataOptions(skip_zero_chunks=True),
+        )
+
+        assert resp.is_download_success is True
+        packets = [
+            call[0][0]
+            for call in mock_serial.write.call_args_list
+            if len(call[0][0]) == FWUPDATA_PACKET_SIZE
+        ]
+        assert len(packets) == 2
+        assert struct.unpack_from("<I", packets[0], 4)[0] == 0
+        assert struct.unpack_from("<I", packets[1], 4)[0] == 0x2000
+
     def test_burn_firmware_fwupdata_rejects_keyfile(self, mock_serial: MagicMock) -> None:
         bp = BootloaderProtocol(serial=mock_serial, boot_timeout=1.0)
         spec = FirmwareSpec(code2="/tmp/code2.bin", keyfile="/tmp/key.txt")
