@@ -1,0 +1,2 @@
+[console_scripts]
+atbm6441-cli = atbm6441_cli.cli:main
