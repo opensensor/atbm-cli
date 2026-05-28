@@ -95,7 +95,7 @@ class TestFlashIdReader:
         mock_serial._count = 0
         response_bytes = [0xEF, 0x40, 0x18]
 
-        def read_side_effect(size: int = 1) -> bytes:
+        def read_side_effect(length: int = 1) -> bytes:
             if mock_serial._count < len(response_bytes):
                 byte = response_bytes[mock_serial._count]
                 mock_serial._count += 1
@@ -125,7 +125,7 @@ class TestFlashIdReader:
     def test_read_id_timeout(self, mock_serial: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """read_id should raise TimeoutError if no bytes returned."""
         monkeypatch.setattr(mock_serial, "write", Mock())
-        monkeypatch.setattr(mock_serial, "read", lambda size=1: b"")
+        monkeypatch.setattr(mock_serial, "read", lambda length=1: b"")
 
         reader = FlashIdReader(mock_serial)
         with pytest.raises(TimeoutError, match="Timeout"):

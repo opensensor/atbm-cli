@@ -80,7 +80,7 @@ class FlashIdReader:
         timeout = self._serial._timeout
 
         while len(response) < expected_length:
-            chunk = self._serial.read(size=1)
+            chunk = self._serial.read(length=1)
             if not chunk:
                 raise TimeoutError(
                     f"Timeout waiting for JEDEC ID bytes (received {len(response)}/3)"
