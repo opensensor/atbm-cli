@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import struct
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -113,6 +114,16 @@ def _parse_response(raw: bytes) -> BootloaderResponse:
         resp.is_error = True
 
     return resp
+
+
+def _format_serial_bytes(data: bytes, limit: int = 256) -> str:
+    """Format a serial byte chunk for live monitor/debug output."""
+    shown = data[:limit]
+    text = shown.decode("utf-8", errors="replace")
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    hex_text = shown.hex(" ")
+    suffix = " ..." if len(data) > limit else ""
+    return f"{len(data)} bytes ascii={text!r}{suffix} hex={hex_text}{suffix}"
 
 
 def _parse_hex_memory_response(
@@ -235,6 +246,7 @@ class BootloaderProtocol:
         chunk_size: int = 1024,
         send_timeout: float = 30.0,
         boot_timeout: float = 5.0,
+        serial_monitor: bool = False,
     ) -> None:
         """Initialize the bootloader protocol.
 
@@ -243,12 +255,29 @@ class BootloaderProtocol:
             chunk_size: Data chunk size for firmware transfer (default: 1024).
             send_timeout: Timeout for firmware send operation (seconds).
             boot_timeout: Timeout for bootloader mode entry (seconds).
+            serial_monitor: Mirror bootloader TX/RX chunks to stderr.
         """
         self._serial = serial
         self._chunk_size = chunk_size
         self._send_timeout = send_timeout
         self._boot_timeout = boot_timeout
+        self._serial_monitor = serial_monitor
         self._progress_callback: Optional[Callable[[int, int], None]] = None
+
+    def _monitor_serial(self, direction: str, data: bytes) -> None:
+        message = f"{direction} {_format_serial_bytes(data)}"
+        if self._serial_monitor:
+            print(message, file=sys.stderr, flush=True)
+        else:
+            logger.debug(message)
+
+    def _monitor_idle(self, elapsed: float, markers: tuple[bytes, ...], buffered: int) -> None:
+        marker_text = ", ".join(repr(marker) for marker in markers)
+        message = f"RX idle {elapsed:.1f}s waiting for {marker_text} ({buffered} bytes buffered)"
+        if self._serial_monitor:
+            print(message, file=sys.stderr, flush=True)
+        else:
+            logger.debug(message)
 
     @property
     def progress_callback(
@@ -279,6 +308,7 @@ class BootloaderProtocol:
             TimeoutError: If bootloader mode is not entered within timeout.
         """
         logger.info("Sending AT+START to enter bootloader mode...")
+        self._monitor_serial("TX", AT_START)
         self._serial.write(AT_START)
 
         try:
@@ -318,7 +348,9 @@ class BootloaderProtocol:
 
         logger.info("Waiting for bootloader prompt '>'...")
         while time.time() < deadline:
-            self._serial.write(b"\r\n")
+            enter = b"\r\n"
+            self._monitor_serial("TX", enter)
+            self._serial.write(enter)
             try:
                 chunk = self._read_until_any(
                     markers=(MARKER_BOOTLOADER_MODE, MARKER_ROM_CODE_MODE, MARKER_BOOT_PROMPT),
@@ -592,10 +624,12 @@ class BootloaderProtocol:
     ) -> bytes:
         """Read until any marker appears, or until timeout/size limit."""
         start_time = time.time()
+        last_idle_report = start_time
         result = bytearray()
 
         while True:
-            if time.time() - start_time > timeout:
+            now = time.time()
+            if now - start_time > timeout:
                 raise TimeoutError(f"Timeout waiting for any of {markers!r}")
             if len(result) > expected_length:
                 raise TimeoutError(
@@ -605,9 +639,14 @@ class BootloaderProtocol:
             remaining = max(0.05, timeout - (time.time() - start_time))
             chunk = self._serial.read(length=256, timeout=min(0.1, remaining))
             if not chunk:
+                now = time.time()
+                if now - last_idle_report >= 5.0:
+                    self._monitor_idle(now - start_time, markers, len(result))
+                    last_idle_report = now
                 time.sleep(0.01)
                 continue
 
+            self._monitor_serial("RX", chunk)
             result.extend(chunk)
             if any(marker in result for marker in markers):
                 return bytes(result)
@@ -641,6 +680,7 @@ class BootloaderProtocol:
         for cmd in commands:
             logger.info("Reading %d flash bytes at offset 0x%06X via %r", length, offset, cmd.strip())
             self._reset_input_buffer()
+            self._monitor_serial("TX", cmd)
             self._serial.write(cmd)
             raw = self._read_until_any(
                 markers=(MARKER_BOOT_PROMPT, b"+OK", b"\nOK", b"+ERR", b"ERROR", b"Unknown command"),

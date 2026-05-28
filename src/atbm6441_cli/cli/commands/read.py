@@ -23,6 +23,7 @@ def read_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--device", choices=["6441", "6446", "6447"], help="Chip model (skip JEDEC for 6446/6447)")
     p.add_argument("--flash-size", type=str, help="Override flash size (hex, e.g. 0x400000 for 4MB)")
     p.add_argument("--manual-mode", action="store_true", help="Skip auto GPIO control")
+    p.add_argument("--serial-monitor", action="store_true", help="Mirror bootloader TX/RX bytes to stderr")
     p.add_argument("--log-level", "-l", default="info", choices=["debug", "info", "warn", "error"], help="Log level")
     p.add_argument("--json", action="store_true", help="JSON output mode")
     p.set_defaults(handler=read_handler)
@@ -60,7 +61,11 @@ def read_handler(args: argparse.Namespace) -> int:
         serial.open()
 
         # Enter bootloader mode and create protocol instance
-        bootloader = BootloaderProtocol(serial, boot_timeout=args.boot_timeout)
+        bootloader = BootloaderProtocol(
+            serial,
+            boot_timeout=args.boot_timeout,
+            serial_monitor=args.serial_monitor,
+        )
         if args.manual_mode:
             print(
                 "Manual mode: assuming the device is already at the bootloader prompt.",
@@ -96,30 +101,35 @@ def read_handler(args: argparse.Namespace) -> int:
             sys.stderr.write(f"\rProgress: {pct:5.1f}% ({bytes_read}/{total} bytes)  ")
             sys.stderr.flush()
 
-        if args.read_all:
-            data = reader.read_all(progress_callback=progress_callback)
-            sys.stderr.write("\n")
-            sys.stderr.flush()
-            print(f"Read {len(data)} bytes from flash (auto-discovered size)")
-        else:
-            data = reader.read_range(addr, length, progress_callback=progress_callback)
-            sys.stderr.write("\n")
-            sys.stderr.flush()
-            print(f"Read {len(data)} bytes from 0x{addr:08X}")
-
-        # Write to output file
         output_dir = os.path.dirname(args.output)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-        with open(args.output, "wb") as f:
-            f.write(data)
 
-        print(f"Wrote {len(data)} bytes to {args.output}")
+        read_addr = 0 if args.read_all else addr
+        read_length = reader.flash_size if args.read_all else length
+        bytes_written = 0
+        print(f"Streaming read to {args.output}", file=sys.stderr)
+        with open(args.output, "wb") as f:
+            for _, chunk in reader.iter_read_range(read_addr, read_length):
+                f.write(chunk)
+                f.flush()
+                bytes_written += len(chunk)
+                progress_callback(bytes_written, read_length)
+
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+        if args.read_all:
+            print(f"Read {bytes_written} bytes from flash (auto-discovered size)")
+        else:
+            print(f"Read {bytes_written} bytes from 0x{addr:08X}")
+
+        print(f"Wrote {bytes_written} bytes to {args.output}")
 
         if args.json:
             output = {
                 "address": f"0x{addr:08X}",
-                "length": len(data),
+                "length": bytes_written,
                 "output": args.output,
             }
             json.dump(output, sys.stdout, indent=2)

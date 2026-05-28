@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Optional
 
 from atbm6441_cli.protocol.flash_id import FlashIdReader, FlashInfo
@@ -68,24 +68,29 @@ class FlashReader:
         Returns:
             Full flash content as bytes.
         """
-        size = self.flash_size
-        total_chunks = (size + self._chunk_size - 1) // self._chunk_size
-        result = bytearray()
+        return self.read_range(0, self.flash_size, progress_callback=progress_callback)
+
+    def iter_read_range(self, addr: int, length: int) -> Iterator[tuple[int, bytes]]:
+        """Yield flash chunks for a specific address range."""
+        total_chunks = (length + self._chunk_size - 1) // self._chunk_size
+        bytes_read = 0
 
         for i in range(total_chunks):
-            addr = i * self._chunk_size
-            remaining = size - len(result)
+            chunk_addr = addr + i * self._chunk_size
+            remaining = length - bytes_read
             chunk_size = min(self._chunk_size, remaining)
 
-            data = self._read_chunk(addr, chunk_size)
-            result.extend(data)
+            data = self._read_chunk(chunk_addr, chunk_size)[:chunk_size]
+            bytes_read += len(data)
 
-            if progress_callback:
-                progress_callback(len(result), size)
-
-            logger.debug("Read chunk %d/%d (%d/%d bytes)", i + 1, total_chunks, len(result), size)
-
-        return bytes(result[:size])
+            logger.debug(
+                "Read chunk %d/%d (%d/%d bytes)",
+                i + 1,
+                total_chunks,
+                bytes_read,
+                length,
+            )
+            yield chunk_addr, data
 
     def read_range(self, addr: int, length: int, progress_callback: Callable[[int, int], None] | None = None) -> bytes:
         """Read a specific address range.
@@ -98,19 +103,13 @@ class FlashReader:
         Returns:
             Read content as bytes.
         """
-        total_chunks = (length + self._chunk_size - 1) // self._chunk_size
         result = bytearray()
 
-        for i in range(total_chunks):
-            chunk_addr = addr + i * self._chunk_size
-            remaining = length - len(result)
-            chunk_size = min(self._chunk_size, remaining)
-
-            data = self._read_chunk(chunk_addr, chunk_size)
+        for _, data in self.iter_read_range(addr, length):
             result.extend(data)
 
             if progress_callback:
-                progress_callback(len(result), length)
+                progress_callback(min(len(result), length), length)
 
         return bytes(result[:length])
 

@@ -71,6 +71,12 @@ class TestFlashReader:
         data = reader_with_bootloader.read_range(addr=0x0, length=0x1000)
         assert len(data) == 0x1000
 
+    def test_iter_read_range_yields_chunks(self, reader_with_bootloader: FlashReader) -> None:
+        """iter_read_range yields address/data pairs without buffering the full read."""
+        chunks = list(reader_with_bootloader.iter_read_range(addr=0x1000, length=0x1800))
+        assert [addr for addr, _ in chunks] == [0x1000, 0x2000]
+        assert [len(data) for _, data in chunks] == [0x1000, 0x800]
+
     def test_read_all_progress_callback(self, reader_with_bootloader: FlashReader) -> None:
         """Progress callback is called after each chunk."""
         calls: list[tuple[int, int]] = []
