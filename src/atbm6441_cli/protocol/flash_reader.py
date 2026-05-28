@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from atbm6441_cli.protocol.flash_id import FlashIdReader, FlashInfo
 from atbm6441_cli.protocol.uart import SerialManager
+
+if TYPE_CHECKING:
+    from atbm6441_cli.protocol.bootloader import BootloaderProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -23,20 +26,20 @@ class FlashReader:
         serial: SerialManager,
         flash_size: int | None = None,
         chunk_size: int | None = None,
-        read_chunk_callback: Callable[[int], bytes] | None = None,
+        bootloader: BootloaderProtocol | None = None,
     ) -> None:
         """
         Args:
             serial: Open SerialManager instance.
             flash_size: Known flash size in bytes. If None, auto-discover via JEDEC.
             chunk_size: Size of each read chunk in bytes. Defaults to 4096.
-            read_chunk_callback: Custom callback to read a single chunk. If None,
-                uses the default read_chunk implementation (placeholder for protocol).
+            bootloader: BootloaderProtocol instance for AT+WIFI_ETF_RMEM reads.
+                If provided, uses this for all flash reads.
         """
         self._serial = serial
         self._flash_size = flash_size
         self._chunk_size = chunk_size or self.CHUNK_SIZE
-        self._read_chunk_callback = read_chunk_callback or self._default_read_chunk
+        self._bootloader = bootloader
 
     @property
     def flash_size(self) -> int:
@@ -51,6 +54,10 @@ class FlashReader:
         id_reader = FlashIdReader(self._serial)
         info = id_reader.read_id()
         return info.size_bytes
+
+    def _read_chunk_via_bootloader(self, addr: int, size: int) -> bytes:
+        """Read a chunk from flash using AT+WIFI_ETF_RMEM."""
+        return self._bootloader.read_memory(addr, size).raw
 
     def read_all(self, progress_callback: Callable[[int, int], None] | None = None) -> bytes:
         """Read the entire flash content.
@@ -127,7 +134,13 @@ class FlashReader:
 
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                data = self._read_chunk_callback(addr)
+                if self._bootloader:
+                    data = self._read_chunk_via_bootloader(addr, chunk_size)
+                else:
+                    raise RuntimeError(
+                        "No bootloader instance provided. "
+                        "Pass bootloader= to FlashReader for AT+WIFI_ETF_RMEM reads."
+                    )
                 if len(data) < chunk_size:
                     # Pad with zeros if we got less than expected
                     data = data + b"\x00" * (chunk_size - len(data))
@@ -141,25 +154,4 @@ class FlashReader:
 
         raise RuntimeError(
             f"Failed to read chunk at 0x{addr:06X} after {self.MAX_RETRIES} attempts: {last_error}"
-        )
-
-    @staticmethod
-    def _default_read_chunk(addr: int) -> bytes:
-        """Default chunk read — placeholder for protocol implementation.
-
-        This will be replaced by the actual protocol layer (T2.4 register ops)
-        once the handshake and register read/write commands are implemented.
-
-        Args:
-            addr: Flash address to read from.
-
-        Returns:
-            Placeholder bytes (all zeros).
-
-        Raises:
-            NotImplementedError: Always — protocol not yet implemented.
-        """
-        raise NotImplementedError(
-            "FlashReader._default_read_chunk is a placeholder. "
-            "Provide a read_chunk_callback or implement protocol layer (T2.4)."
         )

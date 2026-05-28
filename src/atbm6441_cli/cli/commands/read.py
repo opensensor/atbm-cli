@@ -28,6 +28,7 @@ def read_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def read_handler(args: argparse.Namespace) -> int:
     """Handle the read command."""
+    from atbm6441_cli.protocol.bootloader import BootloaderProtocol
     from atbm6441_cli.protocol.flash_reader import FlashReader
     from atbm6441_cli.protocol.uart import SerialManager
 
@@ -52,8 +53,12 @@ def read_handler(args: argparse.Namespace) -> int:
         if args.auto_detect:
             serial.open()  # triggers auto-detect
 
+        # Enter bootloader mode and create protocol instance
+        bootloader = BootloaderProtocol(serial)
+        bootloader.enter_bootloader(timeout=args.boot_timeout)
+
         flash_size = int(args.flash_size, 16) if args.flash_size else None
-        reader = FlashReader(serial, flash_size=flash_size)
+        reader = FlashReader(serial, flash_size=flash_size, bootloader=bootloader)
 
         def progress_callback(bytes_read: int, total: int) -> None:
             pct = (bytes_read / total * 100) if total else 0
