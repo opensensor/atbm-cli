@@ -784,7 +784,7 @@ class BootloaderProtocol:
 
         self._reset_input_buffer()
         raw = b""
-        cmd = BOOT_FWUPDATA + b"\n"
+        cmd = BOOT_FWUPDATA + b"\r\n"
         self._monitor_serial("TX", cmd)
         self._serial.write(cmd)
 
@@ -800,17 +800,25 @@ class BootloaderProtocol:
                 expected_length=4096,
             )
         except TimeoutError:
-            logger.warning(
-                "No fwupdata mode banner; assuming bootloader entered binary message mode"
+            raise RuntimeError(
+                "fwupdata command was not acknowledged: chip never sent "
+                f"{MARKER_FWUPDATA_MODE_V2!r} banner. Refusing to stream "
+                "binary chunks at a text-mode prompt."
             )
-        else:
-            if (
-                b"Unknown command" in raw
-                or b"+ERR" in raw
-                or MARKER_ERROR in raw
-            ):
-                resp = _parse_response(raw)
-                raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
+
+        if (
+            b"Unknown command" in raw
+            or b"+ERR" in raw
+            or MARKER_ERROR in raw
+        ):
+            resp = _parse_response(raw)
+            raise RuntimeError(f"Bootloader rejected fwupdata command: {resp.text}")
+
+        if MARKER_FWUPDATA_MODE_V2 not in raw:
+            raise RuntimeError(
+                "fwupdata banner missing from bootloader response: "
+                f"{_format_serial_bytes(raw, limit=128)}"
+            )
 
         total_size = sum(len(data) for data, _fw_type, _label in images)
         total_progress = 0
@@ -885,6 +893,18 @@ class BootloaderProtocol:
                     raise RuntimeError(
                         f"{label} fwupdata failed at offset 0x{offset:06X}: "
                         f"state={ack.state} result={ack.result} ({result_name})"
+                    )
+                if ack.offset != offset:
+                    raise RuntimeError(
+                        f"{label} fwupdata ack offset mismatch at sent "
+                        f"offset=0x{offset:06X}: ack offset=0x{ack.offset:06X} "
+                        f"msg_id=0x{ack.msg_id:04X} raw={ack_raw.hex(' ')}"
+                    )
+                if ack.msg_id != options.msg_id:
+                    raise RuntimeError(
+                        f"{label} fwupdata ack msg_id mismatch at offset "
+                        f"0x{offset:06X}: ack msg_id=0x{ack.msg_id:04X} "
+                        f"expected=0x{options.msg_id:04X} raw={ack_raw.hex(' ')}"
                     )
 
                 total_progress += len(chunk)

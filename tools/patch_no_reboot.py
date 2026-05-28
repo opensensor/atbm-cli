@@ -108,6 +108,9 @@ def write_outputs(input_path: Path, output_dir: Path, force: bool) -> None:
     if len(image) <= CODE2_ZLIB_OFFSET:
         raise ValueError("Input image is too small to contain the CODE2 zlib mirror")
 
+    code1_original_bytes = bytes(image[CODE1_START:CODE1_END])
+    code2_original_bytes = bytes(image[CODE2_START:CODE2_END])
+
     notes = patch_image(image, force=force)
 
     code1 = bytes(image[CODE1_START:CODE1_END])
@@ -143,12 +146,14 @@ def write_outputs(input_path: Path, output_dir: Path, force: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     firmware_path = output_dir / "firmware_no_reboot.bin"
     code1_path = output_dir / "code1_original.bin"
+    code2_original_path = output_dir / "code2_original.bin"
     code2_path = output_dir / "code2_no_reboot.bin"
     code2_zlib_path = output_dir / "code2_no_reboot_zlib_284000.bin"
     manifest_path = output_dir / "no_reboot_patch_manifest.txt"
 
     firmware_path.write_bytes(image)
-    code1_path.write_bytes(bytes(image[CODE1_START:CODE1_END]))
+    code1_path.write_bytes(code1_original_bytes)
+    code2_original_path.write_bytes(code2_original_bytes)
     code2_path.write_bytes(code2)
     code2_zlib_path.write_bytes(compressed_code2)
 
@@ -156,12 +161,14 @@ def write_outputs(input_path: Path, output_dir: Path, force: bool) -> None:
         *notes,
         f"firmware_no_reboot.bin sha256 {sha256(firmware_path)}",
         f"code1_original.bin sha256 {sha256(code1_path)}",
+        f"code2_original.bin sha256 {sha256(code2_original_path)}",
         f"code2_no_reboot.bin sha256 {sha256(code2_path)}",
     ]
     manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
 
     print(f"Wrote {firmware_path}")
     print(f"Wrote {code1_path}")
+    print(f"Wrote {code2_original_path}")
     print(f"Wrote {code2_path}")
     print(f"Wrote {manifest_path}")
 
