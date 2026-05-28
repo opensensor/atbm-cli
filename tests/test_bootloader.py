@@ -95,7 +95,7 @@ class TestParseResponse:
             b"+OK"
         )
         parsed = _parse_hex_memory_response(raw, 8, base_address=FLASH_MEMORY_BASE)
-        assert parsed == bytes.fromhex("DEADBEEF01020304")
+        assert parsed == bytes.fromhex("EFBEADDE04030201")
 
     def test_parse_bootloader_relative_memory_dump(self) -> None:
         raw = (
@@ -105,7 +105,7 @@ class TestParseResponse:
             b">"
         )
         parsed = _parse_hex_memory_response(raw, 16, base_address=0x00800800)
-        assert parsed == bytes.fromhex("F12EED3A14BD44730268CFC3C9BB5195")
+        assert parsed == bytes.fromhex("3AED2EF17344BD14C3CF68029551BBC9")
 
 
 # ── FirmwareSpec tests ───────────────────────────────────────────────────
@@ -262,8 +262,8 @@ class TestBootloaderProtocol:
         cmd = cmd_call[0][0]
         assert cmd.startswith(b"AT+WIFI_ETF_RMEM")
         assert b"00000000" in cmd
-        # Verify parsed bytes (DEADBEEF in big-endian)
-        assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
+        # rmem/ETF dumps print 32-bit word values; raw memory is little-endian.
+        assert resp.raw == bytes([0xEF, 0xBE, 0xAD, 0xDE])
 
     def test_read_flash_uses_bootloader_flash_mapping(self, mock_serial: MagicMock) -> None:
         mock_serial.read.return_value = (
@@ -277,7 +277,7 @@ class TestBootloaderProtocol:
 
         cmd = mock_serial.write.call_args_list[0][0][0]
         assert cmd == b"rmem 400000\r\n"
-        assert resp.raw == bytes([0xDE, 0xAD, 0xBE, 0xEF])
+        assert resp.raw == bytes([0xEF, 0xBE, 0xAD, 0xDE])
 
     def test_get_modem_info(self, mock_serial: MagicMock) -> None:
         mock_serial.read_until.return_value = b"AT+GMR response\r\n"

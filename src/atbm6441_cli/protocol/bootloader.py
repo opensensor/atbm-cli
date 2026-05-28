@@ -175,11 +175,11 @@ def _parse_hex_memory_response_with_count(
     def write_word(addr: int, word: str) -> None:
         if base_address is not None and addr >= base_address:
             addr -= base_address
+        word_bytes = bytes.fromhex(word)[::-1]
         for byte_idx in range(4):
             pos = addr + byte_idx
             if 0 <= pos < expected_length:
-                hex_pos = byte_idx * 2
-                result[pos] = int(word[hex_pos:hex_pos + 2], 16)
+                result[pos] = word_bytes[byte_idx]
                 parsed_positions.add(pos)
 
     # ETF dump format: {00000000: fa37001e} 45290089 ...
